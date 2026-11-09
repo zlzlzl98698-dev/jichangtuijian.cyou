@@ -1,0 +1,25 @@
+---
+title: IEPL 与 IPLC 专线硬核技术深度解析：本质区别与选型策略
+description: 物理专线、以太网私网专线与公网隧道的底层网络拓扑全景解密。
+---
+
+# IEPL 与 IPLC 专线硬核技术深度解析
+
+> **术语速览**：
+> - **IPLC (International Private Leased Circuit)**：国际私有租用线路（点对点物理裸纤/TDM）。
+> - **IEPL (International Ethernet Private Leased line)**：国际以太网私有专线（基于二层以太网跨国互联）。
+
+---
+
+## 一、为什么物理专线不会被墙？
+
+普通的公网直连或中转，数据包必须经过公网骨干路由与国家级防火墙（GFW）。在高敏感时期，GFW 通过深度数据包检测（DPI）对未知加密流量进行重置或限速 QoS。
+
+而 **IPLC / IEPL** 属于企业向电信运营商（如中国电信 CN2 / 中国移动 CMI）直接租赁的**内网跨境物理通道**。流量在境内入口被打包后，直接在专用物理信道内跨境传输，完全绕过公网出口网关，因此具有 **0 丢包、0 阻断、延迟恒定** 的极致物理特性。
+
+---
+
+## 二、代表性专线机场推荐
+- **IEPL 代表**：**[光速云](/docs/brands/guangsu)**、**[微风网络](/docs/brands/weifeng)**
+- **IPLC 代表**：**[唯兔云](/docs/brands/weitu)**、**[闪跃](/docs/brands/shanyue)**、**[U1S1](/docs/brands/u1s1)**
+

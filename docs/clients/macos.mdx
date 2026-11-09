@@ -1,0 +1,25 @@
+---
+title: macOS 苹果电脑客户端指南 (Clash Verge Rev / sing-box)
+description: 针对 Apple Silicon (M1/M2/M3/M4) 与 Intel 架构优化的 macOS 客户端选择与安装注意。
+---
+
+# macOS 苹果电脑客户端指南
+
+macOS 客户端需重点注意 **Apple Silicon (M 系列芯片)** 与 **Intel 芯片** 的安装包架构差异。
+
+---
+
+## 推荐 macOS 客户端
+
+- **Clash Verge Rev for Mac**：目前 Mac 上体验最出色的开源客户端，支持 ARM64 与 x64 双架构。
+- **sing-box for macOS (SFM)**：官方 sing-box 原生客户端，资源占用极低。
+- **Surge Mac**：业界天花板级网络分析与代理调试工具，功能强大（商业付费）。
+
+---
+
+## 注意事项：首次打开提示「文件已损坏」解决办法
+macOS 强化了 Gatekeeper 安全检测，若遇到无法打开，可在终端中执行：
+```bash
+sudo xattr -r -d com.apple.quarantine /Applications/Clash\ Verge.app
+```
+
