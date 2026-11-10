@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /search
+Disallow: /search?*
+
+# Polite Crawling
+Crawl-delay: 1
+
+# Sitemap Index
+Sitemap: https://jichangtuijian.cyou/sitemap.xml
