@@ -1,10 +1,33 @@
+# 机场 cyou (jichangtuijian.cyou) 搜索引擎抓取合规协议
+# 支持 Google, Bing, 百度 (Baiduspider), 神马/UC (yisouspider)
+
+User-agent: Googlebot
+Allow: /
+Disallow: /search
+Disallow: /search?*
+
+User-agent: bingbot
+Allow: /
+Disallow: /search
+Disallow: /search?*
+
+User-agent: Baiduspider
+Allow: /
+Disallow: /search
+Disallow: /search?*
+
+User-agent: yisouspider
+Allow: /
+Disallow: /search
+Disallow: /search?*
+
 User-agent: *
 Allow: /
 Disallow: /search
 Disallow: /search?*
 
-# Polite Crawling
+# 友好抓取频次限制 (1s)
 Crawl-delay: 1
 
-# Sitemap Index
+# 站点权威地图声明
 Sitemap: https://jichangtuijian.cyou/sitemap.xml
