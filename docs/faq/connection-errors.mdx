@@ -1,0 +1,398 @@
+---
+title: 代理连接报错全收录：Dial Error、Timeout、EOF 与 TLS 握手失败分步排障手册
+description: 深度拆解 Clash Verge Rev、v2rayN 与 Shadowrocket 最常遇到的 12 类底层报错日志，包括 dial tcp i/o timeout、EOF、x509 证书异常、connection reset by peer 与系统时间不同步校验失败，提供命令行抓包测速验证与分步修复方案。
+keywords: [Clash报错日志, dial tcp i/o timeout, EOF报错, x509证书错误, connection reset by peer, VMess时间不同步, v2rayN报错, Shadowrocket超时, TLS握手失败]
+---
+
+import ObservatoryCard from '@site/src/components/ObservatoryCard';
+import AffiliateButton from '@site/src/components/AffiliateButton';
+
+# 代理连接报错全收录：Dial Error、Timeout、EOF 与 TLS 握手失败分步排障手册
+
+> **核心排障结论 (Direct Answer)**：  
+> 当 **Clash Verge Rev**、**v2rayN** 或 **Shadowrocket（小火箭）** 无法上网时，盲目切换节点往往事倍功半，**客户端日志面板（Logs）里的那一行英文报错才是定位根因的“黑匣子”**。  
+> 代理连接本质上是一条由 **「本地监听端口 -> 协议握手认证 -> 传输层 TCP/UDP 建连 -> TLS 安全握手 -> 远端落地转发」** 组成的五段式管道。只要理解报错发生在管道的哪一段：  
+> - 报错含 `address already in use` 或 `Wintun` 属于**本地第 1 段（环境与驱动冲突）**；  
+> - 报错含 `i/o timeout`、`connection refused` 或 `no route to host` 属于**第 2-3 段（端口可达性与网络路由阻断）**；  
+> - 报错含 `EOF`、`connection reset by peer`、`x509` 或 `VMess/Trojan auth failed` 属于**第 4 段（TLS 握手、证书劫持、系统时间偏差或审计阻断）**。  
+> 遵循本文整理的 **12 类核心日志图谱与命令行验证工具链**，可在 5 分钟内精准锁定故障层并完成修复。
+
+---
+
+## 一、代理连接建立生命周期与报错发生阶段图谱
+
+任何一次跨境请求在客户端内部都会经历五个连续的状态阶段。下表与拓扑图展示了 12 类常见错误在连接生命周期中的精确落点：
+
+```
+[浏览器/终端] ──(1.本地接入)──> [127.0.0.1:7890 / TUN网卡]
+                                         │
+                                  (2.本地DNS/路由)
+                                         │
+                                         ▼
+[境外目标网站] <──(5.远端落地)── [机场节点服务器] <──(4.TLS/协议认证)── [3.TCP/QUIC建连]
+```
+
+| 报错发生阶段 | 典型报错日志关键词 | 第一怀疑根因 | 命令行优先验证手段 |
+| :--- | :--- | :--- | :--- |
+| **阶段 1：本地接入与驱动** | `bind: address already in use`、`Wintun / TUN failed` | 多代理端口冲突、残留内核进程、权限不足 | `netstat -ano` / `lsof -i` |
+| **阶段 2：本地 DNS 解析** | `lookup failed`、`i/o timeout` (指向 53 端口) | 机场入口域名被污染、本地 DNS 死锁 | `nslookup` / `dig` |
+| **阶段 3：传输层建连** | `dial tcp ... i/o timeout`、`connection refused`、`no route to host` | 节点 IP/端口变更未更新订阅、防火墙阻断、校园网限端口 | `tcping` / `Test-NetConnection` |
+| **阶段 4：TLS 与协议握手** | `EOF`、`connection reset by peer`、`x509`、`TLS handshake timeout`、`系统时间误差` | 系统时钟偏移、中间人代理劫持证书、DPI 特征重置、并发超限 | `openssl s_client` / `curl -v` |
+| **阶段 5：远端读取响应** | `context deadline exceeded`、`read: connection timed out` | 入口正常但跨境光缆或落地机卡死、节点负载过载 | `curl -x` / `mtr` |
+
+---
+
+## 二、排障准备：开启客户端 Debug 日志与装好命令行探针
+
+在动手修复前，请先让报错“显形”，并准备好操作系统自带的网络诊断命令行工具。
+
+### 1. 如何查看三大主流客户端的原始报错日志
+- **Clash Verge Rev**：点击左侧导航栏 **「日志 (Logs)」**，将顶部日志级别下拉框从默认的 `Info` 临时切换为 **`Debug`**，随后在浏览器访问一个海外网页，即可看到精确到域名、规则、节点与底层 Error 的实时输出。
+- **v2rayN (Windows)**：勾选主界面下方的 **「显示信息 / 日志」** 面板，或在「设置 -> 参数设置 -> Core 基础设置」中将日志等级调为 `debug` 或 `info`，重启内核后观察底部报错框。
+- **Shadowrocket (iOS)**：点击底部导航栏 **「数据 / Logs」** 或在「设置 -> 诊断 (Diagnostics)」中开启连接日志记录，复现断网操作后即可导出或查看握手日志。
+
+### 2. 四大核心命令行验证武器库
+- **Windows PowerShell TCP 端口探针**（无需安装第三方软件）：
+  ```powershell
+  Test-NetConnection -ComputerName 节点域名或IP -Port 端口号
+  ```
+- **跨平台 `curl` 代理通道直测命令**（绕过浏览器缓存直接测试本地端口转发是否成功）：
+  ```bash
+  curl -v -x http://127.0.0.1:7890 https://www.google.com/generate_204
+  ```
+- **OpenSSL 握手与证书链核验命令**：
+  ```bash
+  openssl s_client -connect 节点域名:443 -servername 伪装SNI域名
+  ```
+- **Windows / macOS 系统时间强制校时命令**：
+  ```powershell
+  w32tm /resync /force
+  ```
+
+---
+
+## 三、12 类底层报错日志深度拆解、命令行验证与分步修复
+
+以下按出现频率与排查难度，逐一剖析 **12 类最常困扰用户的底层报错日志**。
+
+---
+
+### 错误 1：`dial tcp x.x.x.x:port: i/o timeout`
+
+- **典型日志原文**：
+  `[TCP] dial DIRECT/Node-HK-01 (match Rule) to www.google.com:443 error: dial tcp 45.xx.xx.xx:20443: i/o timeout`
+- **底层根因剖析**：
+  `i/o timeout` 是网络层最典型的“有去无回”。客户端通过操作系统向机场中转入口 IP 的指定端口发送了 TCP `SYN` 握手包，但在内核设定的超时窗口（通常为 5 至 10 秒）内没有收到任何 `SYN-ACK` 回包也没有收到拒绝包。常见诱因包括：
+  1. 机场运维更换了入口服务器 IP 或动态端口，而本地客户端长期未更新订阅；
+  2. 节点入口 IP 或端口已被本地运营商防火墙或校园网网关策略静默丢弃（黑洞路由）；
+  3. 个人电脑处于完全无外网连接状态，或本地安全软件（如火绒、360、Windows Defender）拦截了内核进程（`verge-mihomo.exe` / `xray.exe`）的出站联网权限。
+- **命令行验证方法**：
+  在 PowerShell 或终端执行 TCP 端口连通性测试：
+  ```powershell
+  Test-NetConnection -ComputerName 45.xx.xx.xx -Port 20443
+  ```
+  如果返回 `TcpTestSucceeded : False` 且 `PingSucceeded : False` 或超时，说明你的电脑到这个入口 IP 和端口之间物理上根本不通，**这绝对不是客户端分流或浏览器设置的问题**。
+- **分步修复方案**：
+  1. **首要动作**：登录机场官网确认套餐未到期，然后点击客户端「更新订阅」拉取最新入口 IP 与端口；
+  2. **检查放行**：在 Windows 防火墙或第三方安全软件的“联网控制”中，放行 `Clash Verge`、`verge-mihomo.exe`、`xray.exe` 的全部公用与专用网络出站权限；
+  3. **跨网段测试**：手机切至 5G 热点给电脑连接后重试。如果 5G 热点能秒连而公司/学校 Wi-Fi 报 `i/o timeout`，证明当前局域网网关封锁了非标准高危端口（如 20443、30000 等），建议切换至使用标准 **443 端口**的节点或更换支持高防多线 BGP 入口的线路（如 [光速云](/docs/brands/guangsu)）。
+
+---
+
+### 错误 2：`EOF`（Unexpected EOF / proxy read EOF）
+
+- **典型日志原文**：
+  `[TCP] dial Node-JP-02 error: EOF` 或 `read tcp 192.168.1.5:51234->x.x.x.x:443: EOF`
+- **底层根因剖析**：
+  `EOF`（End Of File）在网络 Socket 编程中代表**对端服务器或中间链路在尚未返回任何有效协议响应前，主动发出了 `FIN` 或粗暴切断了当前连接**。和 `i/o timeout`（完全没理你）不同，`EOF` 说明 TCP 三次握手大概率已经到达了某台设备，但紧接着在应用层协议解析或认证阶段被直接“挂断电话”。主要原因包括：
+  1. **并发 IP 或连接数超限被踢**：服务端面板检测到当前账号在多个异地 IP 同时在线或并发连接爆表，主动关闭新传入的连接；
+  2. **加密方式或协议参数错配**：例如服务端已升级为 VLESS-Reality 或 Shadowsocks 2022，而客户端仍保留旧密码、旧加密方式（如 `aes-256-gcm` 错写成 `chacha20`）或未更新的 UUID；
+  3. **公网线路触发 DPI 主动阻断**：在部分公网直连或普通中转节点上，防火墙识别到早期代理握手特征后向服务端与客户端同时注入断连指令；
+  4. **服务器后端进程崩溃或负载过载**：落地机上的 Xray/Sing-box 服务正在重启或内存溢出（OOM）。
+- **命令行验证方法**：
+  使用 `curl` 观察 TLS 与 HTTP 阶段在哪个字节断开：
+  ```bash
+  curl -v -x http://127.0.0.1:7890 https://api.ipify.org
+  ```
+  如果客户端可以正常 TCP 连上入口端口（`Test-NetConnection` 为 `True`），但经过代理请求任何网站都瞬间返回 `Empty reply from server` 或 `Proxy CONNECT aborted`，即为典型的服务端/中间件主动切断 `EOF`。
+- **分步修复方案**：
+  1. **重置/更新订阅**：排除协议参数、密码、UUID 与服务端不一致的问题；
+  2. **排查设备并发**：登录机场后台检查在线 IP 数量或流量是否刚好归零（很多机场流量耗尽后不会删订阅，而是直接对节点连接返回 `EOF`）；
+  3. **升级客户端内核**：确保 Clash Verge Rev / v2rayN 为 2026 最新版本，旧内核无法解析新型加密套件时在握手后也会报 `EOF`；
+  4. **切换节点线路**：切换至基于物理内网专线（不过公网 DPI 嗅探）的节点组，排查是否为单个落地节点宕机所致。
+
+---
+
+### 错误 3：`x509: certificate signed by unknown authority` / `certificate has expired`
+
+- **典型日志原文**：
+  `Get "https://sub.example.com/...": tls: failed to verify certificate: x509: certificate signed by unknown authority` 或 `x509: certificate is valid for *.company-proxy.com, not www.google.com`
+- **底层根因剖析**：
+  `x509` 是数字证书标准格式。出现此报错说明客户端内核（或代理服务端）在发起 HTTPS / TLS 握手时，**校验对方返回的 SSL 证书链失败**。具体分为两种截然不同的场景：
+  1. **企业/校园网安全网关中间人劫持（MitM）**：公司内网防火墙、杀毒软件（如卡巴斯基、ESET、小红伞的 HTTPS 扫描功能）或抓包工具（Charles/Fiddler）拦截了你的 TLS 流量，并下发了自签名根证书。代理内核（如 Mihomo / Go 语言程序）出于严格安全机制不信任系统第三方杀毒证书，从而拒绝建立连接；
+  2. **机场订阅域名或节点证书过期 / DNS 污染指向错误页面**：本地宽带把机场的订阅域名劫持到了运营商的反诈提示页面或错误 IP，返回了一个域名完全不匹配的 HTTPS 证书；
+  3. **设备系统年份错误**：如果电脑主板 CMOS 电池没电导致时间回退到 2010 年或跳到 2030 年，当前全部有效证书都会被判定为“尚未生效”或“已过期”。
+- **命令行验证方法**：
+  使用 `openssl` 打印目标地址实际吐出的证书签发者（Issuer）与有效期：
+  ```bash
+  openssl s_client -showcerts -connect sub.example.com:443 -servername sub.example.com
+  ```
+  重点查看输出中的 `Verify return code` 与 `i:`（Issuer 签发机构）。正常应由 `Let's Encrypt`、`DigiCert`、`Google Trust Services` 等公共 CA 签发；若显示某杀毒软件名称或未知内网网关名称，即为中间人劫持。
+- **分步修复方案**：
+  1. **校对系统日期与年份**：确保年月日与当前真实时间一致；
+  2. **关闭杀毒软件的 HTTPS 流量扫描**：在卡巴斯基、Avast 等安全软件设置中关闭“加密连接扫描（Encrypted connections scanning）”，并将代理客户端加入白名单；
+  3. **清理残留系统代理/抓包证书**：关闭 Fiddler、Charles、Proxyman 等抓包工具；
+  4. **针对临时订阅更新**：若是订阅域名被污染导致证书不匹配，请先开启可用代理节点，或在浏览器打开官网确认最新防屏蔽订阅域名。**切勿盲目在客户端全局勾选“跳过证书验证（skip-cert-verify: true）”**，否则会丧失防中间人窃听保护。
+
+---
+
+### 错误 4：`read/write: connection reset by peer`
+
+- **典型日志原文**：
+  `[TCP] read tcp 192.168.1.10:54321->103.xx.xx.xx:443: wsarecv: An existing connection was forcibly closed by the remote host.`（Windows）或 `connection reset by peer`（macOS/Linux）
+- **底层根因剖析**：
+  与温和断开的 `EOF`（`FIN` 包）不同，`connection reset by peer` 意味着你的客户端收到了一个强硬的 **TCP `RST`（Reset）报文**。在实际网络工程中，造成 `RST` 的三大元凶分别是：
+  1. **GFW 深度报文检测（DPI）特征阻断**：当使用传统 Shadowsocks 旧加密或裸 TLS 特征明显的协议经公网出境时，流量经过国际出口网关会被防火墙实时嗅探，一旦命中特征指纹，防火墙会向通信双方伪造发送 `RST` 包强行拆散连接，常见表现是“连上能打开一两个网页，几秒后立刻断流并报 Reset，过一两分钟又恢复”；
+  2. **机场审计风控拦截**：你的请求命中了机场后端禁止的协议或地址（例如在代理环境下打开 BT 下载器、访问高危垃圾邮件端口、或触发了节点所在机房的防火墙规则）；
+  3. **机场上游服务器负载均衡踢出**：部分多租户公网中转机器在带宽打满或连接表溢出时，会直接发送 `RST` 清理旧会话。
+- **命令行验证方法**：
+  连续向目标落地测试端口发起短连接与大包测试，或使用 `curl` 连续请求 10 次观察失败率：
+  ```bash
+  for i in {1..10}; do curl -s -o /dev/null -w "%{http_code} %{time_total}\n" -x http://127.0.0.1:7890 https://www.google.com/generate_204; done
+  ```
+  如果在第 2~3 次突然出现 `000` 状态码并伴随日志 `connection reset`，基本可确认是传输链路遭遇了主动特征干扰或对端连接池强制重置。
+- **分步修复方案**：
+  1. **检查并关闭 P2P/BT 软件**：确认后台没有迅雷、qBittorrent、百度网盘 P2P 上传或微信自动更新包正在穿过代理；
+  2. **更换现代抗封锁协议**：在支持多协议的客户端中优先选用 **VLESS-Reality**、**Trojan (启用 uTLS 指纹伪装)** 或 **Hysteria2** 协议节点（技术细节见 [主流加密协议抗封锁对比](/docs/observatory/protocols)）；
+  3. **升级底层传输通道**：公网直连与普通公网中转永远无法彻底避免出口 DPI 探测，长期稳定刚需建议直接选择走内网光缆、不过公网国际出口的 **IEPL / IPLC 物理专线机场**（如 [光速云](/docs/brands/guangsu)）。
+
+---
+
+### 错误 5：系统时间不同步导致的 VMess / Trojan / TLS 校验失败
+
+- **典型日志原文**：
+  v2rayN / Xray 日志：`rejected proxy/vmess/encoding: failed to read request header > invalid user` 或 `io: read/write on closed pipe`；  
+  Mihomo / Clash 日志：`vmess auth failed` / `trojan handshake error` / `tls: handshake failure`
+- **底层根因剖析**：
+  这是一个极其隐蔽且让无数新手崩溃的经典大坑！**VMess 协议为了防止重放攻击（Replay Attack），在其认证报文头部强制嵌入了当前设备的 UTC Unix 时间戳，服务端硬性规定客户端时间与服务器标准时间的误差绝对不能超过 90 秒（部分严格配置仅容忍 30~60 秒）**。同样，TLS 证书有效期校验与部分 TOTP 动态令牌也高度依赖精准系统时钟。  
+  双系统用户（Windows + Linux/macOS 双启动导致硬件 RTC 时钟按本地时间还是 UTC 读取错乱）、老旧笔记本主板纽扣电池耗尽、或者虚拟机挂起恢复后，系统时间常常比真实北京时间慢了几个小时或快了几分钟——此时网络物理完全通畅，但每一条发往 VMess 节点的数据都会被服务端直接当成非法重放攻击丢弃！
+- **命令行验证方法**：
+  在终端查看当前系统时间戳与时区，并与权威时间源比对：
+  - Windows PowerShell：
+    ```powershell
+    w32tm /stripchart /computer:ntp.aliyun.com /dataonly /samples:3
+    ```
+    查看输出的偏移量（如 `+00.012s` 为正常，若显示 `-185.400s` 或几小时偏差则必挂无疑）。
+  - macOS / Linux：
+    ```bash
+    date -u
+    ```
+- **分步修复方案**：
+  1. **Windows 10/11**：右键右下角任务栏时钟 -> 选择「调整日期和时间」-> 开启「自动设置时间」与「自动设置时区（确保为 `(UTC+08:00) 北京，重庆...`）」-> 点击下方的 **「立即同步」**；若同步报错，先以管理员身份在 PowerShell 运行 `net start w32time` 再执行 `w32tm /resync /force`；
+  2. **macOS**：打开「系统设置 -> 通用 -> 日期与时间」，开启「自动设定日期与时间」及自动设定时区；
+  3. **iOS / Android**：进入系统时间设置开启“自动设置”，并核对时区是否正确；
+  4. **软路由 OpenWrt**：在「系统 -> 系统 -> 时间同步」中启用 NTP 客户端，并确保上游 NTP 服务器（如 `ntp.ntsc.ac.cn`、`ntp.aliyun.com`）在 OpenClash 中已加入直连白名单，防止出现“必须先联网才能同步时间，不同步时间又连不上代理”的死锁。
+
+---
+
+### 错误 6：`listen tcp 127.0.0.1:7890: bind: address already in use`（端口冲突）
+
+- **典型日志原文**：
+  `Start Mixed server error: listen tcp 127.0.0.1:7890: bind: address already in use`（Linux/Mac）或 `Only one usage of each socket address (protocol/network address/port) is normally permitted.`（Windows）
+- **底层根因剖析**：
+  本地回环地址的 `7890`（Clash 默认混合端口）或 `10808/10809`（v2rayN 默认端口）在同一时间只能被一个程序独占监听。当你之前运行过 Clash for Windows、其他机场自研客户端、或者 Clash Verge 上次异常崩溃导致后台的 `verge-mihomo.exe` 僵尸进程没有彻底退出时，新启动的客户端试图绑定同一个端口就会直接报错失败，导致全局断网。此外，Windows 系统本身的 **Hyper-V / WSL2 动态保留端口范围（Excluded Port Ranges）** 有时也会恰好把 `7890` 划走占坑。
+- **命令行验证方法**：
+  查找究竟是谁占用了 `7890` 端口：
+  - Windows CMD / PowerShell：
+    ```powershell
+    netstat -ano | findstr 7890
+    netsh interface ipv4 show excludedportrange protocol=tcp
+    ```
+    拿到最后一列的 PID 数字后，执行 `tasklist | findstr <PID>` 即可揪出真凶进程名。
+  - macOS / Linux：
+    ```bash
+    lsof -i :7890
+    ```
+- **分步修复方案**：
+  1. **清理僵尸进程**：打开任务管理器（Windows）或活动监视器（Mac），彻底结束所有残留的 `clash`、`mihomo`、`verge-mihomo`、`xray`、`v2ray` 进程；卸载或完全退出冲突的同类代理软件（一次只开一个代理客户端）；
+  2. **避开 Windows 动态保留端口**：如果 `netsh` 命令显示 `7890` 落在了系统的 `excludedportrange` 保留区间内（Hyper-V 常见现象），直接在客户端设置中将混合监听端口（Mixed Port）修改为 **`7897`** 或 **`17890`** 等高位非保留端口即可永久解决。
+
+---
+
+### 错误 7：`dial tcp 127.0.0.1:7890: connect: connection refused`
+
+- **典型日志原文**：
+  终端报错 `curl: (7) Failed to connect to 127.0.0.1 port 7890: Connection refused` 或客户端提示内核未启动
+- **底层根因剖析**：
+  与上面的端口被他人占用恰好相反，`connection refused` 说明本地的 `7890` 端口**压根没有任何程序在监听**！通常是以下两种情况：
+  1. 客户端图形界面虽然打开了，但底层的代理内核（Mihomo / Xray）因为当前选中的订阅配置文件存在 YAML 语法错误、损坏的规则文件或缺失 GeoIP 数据库而启动失败闪退；
+  2. 浏览器或终端依然残留着之前设定的 `http://127.0.0.1:7890` 系统代理/环境变量，但你实际上已经关闭了代理软件，或者客户端改用了其他端口号（例如 v2rayN 的默认 HTTP 端口是 `10809` 而非 `7890`）。
+- **命令行验证方法**：
+  检查本地正在监听的代理端口：
+  ```powershell
+  netstat -ano | findstr LISTENING | findstr -E "7890|7897|10808|10809"
+  ```
+- **分步修复方案**：
+  1. 核对客户端「设置」中的实际监听端口（Mixed Port / HTTP Port）与系统代理、命令行环境变量配置是否完全一致；
+  2. 在客户端切换一份干净的默认配置文件或重新导入机场官方原始订阅（删除你自己手动修改出错的覆写脚本 Merge/Script），观察内核状态灯是否恢复绿灯；
+  3. 检查系统盘客户端安装目录是否被 Windows Defender 误删了 `mihomo.exe` 或 `xray.exe` 核心可执行文件（若被杀毒软件隔离，需还原并添加文件夹排除项）。
+
+---
+
+### 错误 8：`TLS handshake timeout`（TLS 握手超时）
+
+- **典型日志原文**：
+  `Get "https://...": net/http: TLS handshake timeout` 或节点连接日志中出现 `tls handshake timeout`
+- **底层根因剖析**：
+  TCP 三次握手已经顺利完成（证明 IP 和端口是通的），但紧接着在交换 TLS 证书、协商加密套件的阶段卡死超时。这通常意味着：
+  1. **严重跨国丢包或高延迟拥塞**：尤其在晚高峰公网国际出口丢包率高达 20%~40% 时，较大的 TLS 证书包（通常超过一个 MTU 需要分片发送）极易在半路丢失重传失败；
+  2. **SNI 特征遭遇精准丢包干扰**：部分防火墙并不直接发 `RST` 包，而是对包含特定阻断 SNI 特征的 `ClientHello` 报文执行后续数据包静默丢弃（Packet Drop），表现在客户端就是一直卡在 TLS 握手直到超时；
+  3. **服务器 CPU 跑满或握手线程阻塞**：服务端正在遭受 DDoS 攻击或并发连接过多无法及时响应加解密运算。
+- **命令行验证方法**：
+  直接对节点入口与域名测试完整 TLS 握手耗时：
+  ```bash
+  curl -w "TCP建连: %{time_connect}s | TLS完成: %{time_appconnect}s | 总耗时: %{time_total}s\n" -o /dev/null -s https://节点伪装域名
+  ```
+  如果 `time_connect` 很快但 `time_appconnect` 超过 5 秒甚至直接超时，即确认卡在 TLS 握手阶段。
+- **分步修复方案**：
+  1. 若是在请求**机场订阅链接**时报此错，先开启任意可用节点走代理更新，或使用机场提供的防污染备用订阅域名；
+  2. 若是在连接**具体代理节点**时报此错，优先切换至基于 **IEPL / IPLC 内网物理专线** 的节点（跳过公网海缆拥堵与 SNI 嗅探丢包），或者尝试启用支持 QUIC/UDP 抗丢包的 **Hysteria2** 节点应对弱网环境。
+
+---
+
+### 错误 9：`context deadline exceeded`
+
+- **典型日志原文**：
+  `[TCP] dial Node-US-01 error: context deadline exceeded (Client.Timeout exceeded while awaiting headers)`
+- **底层根因剖析**：
+  这是 Go 语言编写的现代内核（Mihomo、Sing-box、Xray）中极其常见的通用超时提示，意思是**整个请求从发起到等待目标服务器返回 HTTP 响应头的全过程超出了预设的 Context 上下文截止时间**。和单纯的 `dial tcp timeout` 相比，它更多发生在“客户端连得上中转入口，但后半段链路（中转到落地、或落地到目标网站如 OpenAI）卡死无响应”的场景：
+  1. 中转机器与境外落地机之间的跨境光缆出现故障或严重拥塞；
+  2. 落地服务器本身已被目标网站（如 Google/Cloudflare）封锁或限流挂起；
+  3. 代理节点测速并发过高，一次性对上百个节点发起 URL Test 把本地家庭宽带或路由器 NAT 转换表打爆，导致大批正常节点排队超时误报。
+- **命令行验证方法**：
+  用 `curl` 指定较长超时时间单独测试该节点：
+  ```bash
+  curl -v --max-time 15 -x http://127.0.0.1:7890 https://www.youtube.com/generate_204
+  ```
+- **分步修复方案**：
+  1. 在客户端逐个手动测速少数核心节点，避免在弱性能路由器或小内存设备上同时并发测试数百个节点；
+  2. 将节点切换至其他地域集群（如从美西绕路节点切回香港、新加坡 IEPL 专线），验证是否为单个跨境光缆方向维护中断；
+  3. 排查本地路由器是否开启了过于激进的防火墙连接数限制或劣质光猫路由转发性能不足（建议将光猫改桥接由独立路由器拨号）。
+
+---
+
+### 错误 10：`no route to host` / `network is unreachable`
+
+- **典型日志原文**：
+  `dial tcp 192.168.50.1:443: connect: no route to host` 或 `connect: network is unreachable`
+- **底层根因剖析**：
+  操作系统内核路由表明确告诉你：**本地根本找不到通往目标 IP 的有效网络路径**。常见原因分为两类：
+  1. **TUN 虚拟网卡路由表损坏或网卡死锁**：在开启 TUN 模式的瞬间，客户端篡改了默认网关路由，但物理网卡（Wi-Fi 或有线网）随后断开重连，导致虚拟网卡成了“悬空孤岛”，所有包都被送进 TUN 却找不到真实物理出口；
+  2. **开启了代理下的 IPv6 访问但本地无 IPv6 路由**：目标域名解析出了 IPv6 地址，客户端尝试向该 IPv6 地址发起直连或转发，但当前宽带或虚拟网卡未分配有效 IPv6 全局路由表，直接报错 `network is unreachable`。
+- **命令行验证方法**：
+  检查当前本机路由表与网卡状态：
+  - Windows：`route print -4`（查看 `0.0.0.0` 默认路由网关是否指向了异常的 TUN 虚拟网卡或已断开的接口）；
+  - macOS / Linux：`netstat -rn` 或 `ip route show`。
+- **分步修复方案**：
+  1. 先彻底关闭客户端的 **TUN 模式** 与 **服务模式**，重启 Wi-Fi 或插拔网线恢复物理默认路由；
+  2. 在客户端配置文件中将 `ipv6: false` 显式关闭（除非确认本地宽带与机场节点均完整支持双栈 IPv6）；
+  3. 在 Clash Verge Rev 设置中点击「重新安装服务模式」并指定正确的出站物理网卡名称，防止多网卡（如同时插着网线、连着 Wi-Fi、开着 VMware 虚拟网卡）时自动选错出口。
+
+---
+
+### 错误 11：`DNS resolution failed` / `lookup xxx: no such host`
+
+- **典型日志原文**：
+  `[DNS] lookup sub.airport.com on 223.5.5.5:53: no such host` 或 `server misbehaving`
+- **底层根因剖析**：
+  代理客户端本身在向 DNS 服务器查询“节点域名”或“目标网站域名”的真实 IP 地址时彻底失败。原因主要有三：
+  1. 机场用于解析节点中转入口的域名过期、被国内运营商在本地 53 端口直接劫持并返回 `NXDOMAIN`（域名不存在）；
+  2. 客户端配置了错误的 `default-nameserver`（引导 DNS）——例如把引导 DNS 设成了 `1.1.1.1` 或 `https://dns.google/dns-query`，而引导 DNS 本身在没有建立代理之前是无法直连访问的，从而陷入“**先有鸡还是先有蛋**”的死锁（要连代理就得先解析节点域名，要解析节点域名又要走被墙的境外 DNS）；
+  3. 校园网或公司内网屏蔽了所有外部 UDP 53 端口 DNS 请求，强制要求使用内网 DHCP 下发的网关 DNS。
+- **命令行验证方法**：
+  分别用本地网关 DNS 与公共加密 DNS 测试目标域名解析结果：
+  ```powershell
+  nslookup 节点或订阅域名 223.5.5.5
+  nslookup 节点或订阅域名 119.29.29.29
+  ```
+- **分步修复方案**：
+  1. 排查并修正配置文件中的 `default-nameserver`，**引导 DNS 必须永远填写国内高可用纯 IP 地址**（如 `223.5.5.5`、`119.29.29.29`），绝不能填境外被阻断的 IP 或域名型 DoH；
+  2. 若是在公司/校园网内使用，`default-nameserver` 中补充 `system`（系统当前 DHCP 获取的局域网 DNS），避免被内网防火墙拦截 UDP 53 端口；
+  3. 若机场中转域名遭运营商 NXDOMAIN 阻断，点击更新订阅获取新中转域名或切换备用订阅通道。
+
+---
+
+### 错误 12：`TUN / Wintun failed to start`（虚拟网卡驱动启动失败 / 权限不足）
+
+- **典型日志原文**：
+  `Start TUN error: Access is denied` / `CreateWintunAdapter failed` / `insufficient privileges`
+- **底层根因剖析**：
+  在 Windows、macOS 与 Linux 上接管底层 Layer 3 网络数据包、创建虚拟网卡属于高危内核级特权操作。以普通用户权限启动的 GUI 界面无权向操作系统注入网卡驱动；此外，在 Windows 上如果同时安装过 WireGuard、OpenVPN、ZeroTier、Tailscale 或雷神/UU 游戏加速器，可能发生 Wintun 驱动版本冲突或残留虚拟适配器名称碰撞。
+- **命令行验证方法**：
+  在 Windows PowerShell 检查当前网络适配器列表及 Clash 服务运行状态：
+  ```powershell
+  Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
+  Get-Service | Where-Object {$_.Name -like "*clash*" -or $_.Name -like "*verge*"}
+  ```
+- **分步修复方案**：
+  1. **Windows 平台（Clash Verge Rev）**：切勿仅仅用右键“以管理员身份运行”应付了事，标准做法是在「设置 -> 服务模式 (Service Mode)」中点击 **「安装服务 (Install)」** 并确保服务状态为绿色 Active，随后再开启 TUN 开关；若安装失败，先卸载重启电脑后再点安装；
+  2. **排查驱动冲突**：进入「设备管理器 -> 网络适配器」，卸载残留无用的旧版 `Wintun` 或 `Clash Tunnel` 虚拟网卡，再重启客户端重建；
+  3. **macOS 平台**：首次开启 TUN 模式时必须在弹出的系统认证框输入开机密码授予系统权限，并确保内核文件具备正确的 Root SUID 或系统服务授权。详细操作见 [macOS 深度配置指南](/docs/clients/macos)。
+
+---
+
+## 四、底层排障高频 FAQ（10 问 10 答）
+
+### Q1：日志里全都是正常绿色的 `200 OK` 或连接成功，但浏览器依然显示“无法访问此网站 / ERR_CONNECTION_CLOSED”是什么原因？
+**A**：请重点检查浏览器自身的三项独立设置：第一，Chrome/Edge 是否安装了其他广告拦截、隐私代理扩展（如 SwitchyOmega、FoxyProxy、旧版 VPN 插件）接管并覆盖了系统代理；第二，浏览器设置中的「使用安全 DNS（DoH）」是否开启了与客户端冲突的配置；第三，尝试按 `Ctrl + Shift + N` 打开浏览器无痕模式测试，若无痕模式秒开，则说明是浏览器扩展或旧 HSTS 缓存导致。
+
+### Q2：为什么 Clash Verge Rev 里每次点开 TUN 模式，系统右下角网络图标就会变成“小地球（无 Internet 连接）”，但实际上网页都能打开？
+**A**：这是 Windows 系统的 **NCSI（网络连接状态指示器）** 探测机制导致的视觉误报。Windows 会定期请求 `www.msftconnecttest.com` 来判断当前是否联网。若该域名被客户端规则误判走代理且节点响应稍慢，或者 Fake-IP 未放行该探测域名，Windows 就会显示小地球（进而导致微软商店、OneDrive 等原生应用罢工）。只需将 `*.msftconnecttest.com` 和 `*.msftncsi.com` 加入 `fake-ip-filter` 并设为 `DIRECT` 直连即可消除小地球。
+
+### Q3：使用 v2rayN 时，为什么勾选“自动配置系统代理”后部分网页正常，一旦选“清除系统代理”电脑就彻底断网？
+**A**：极有可能是电脑此前安装了其他软件（例如游戏加速器、企业 VPN、抓包工具）修改过 Windows 注册表代理键，或者系统内网启用了特殊的 PAC 自动脚本。当 v2rayN 执行清除时，如果被杀毒软件拦截写注册表操作，就会残留无效地址。打开 PowerShell 运行 `Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'`，确认 `ProxyEnable` 为 `0` 且 `AutoConfigURL` 为空即可恢复直连。
+
+### Q4：为什么 Shadowrocket（小火箭）在蜂窝 5G 流量下所有节点全通，一连上家里的 Wi-Fi 就全部报 `Timeout`？
+**A**：这几乎 100% 是家庭宽带路由器、光猫或本地 DNS 劫持导致的。常见原因包括：家里路由器开启了“家长控制 / 上网行为管理”屏蔽了未知海外端口；光猫自带的 IPv6 防火墙开启了严格入站丢包；或者路由器 DNS 缓存了机场入口域名的旧污染地址。尝试把手机 Wi-Fi 设置中的「配置 DNS」由自动改为手动 `223.5.5.5`，或重启光猫路由器测试。
+
+### Q5：为什么在公司或学校内网里，Shadowsocks 和 VMess 协议节点全都报 `Timeout` 或 `EOF`，但切换成 443 端口的 VLESS / Trojan 节点却能秒连？
+**A**：企业级防火墙（如深信服、飞塔、华为 USG）和高校校园网网关通常采取 **“白名单端口放行 + 协议深度识别”** 策略——除常见的 `80`（HTTP）、`443`（HTTPS）以及少数办公端口外，其他随机高位端口（如 `25600`、`38421`）全部被网关直接丢弃。因此，使用标准 **`443` 端口配合 TLS 伪装**的现代协议（如 [光速云](/docs/brands/guangsu) 的标准 VLESS 专线配置）在严苛企业与校园网环境下拥有最高的穿透成功率。
+
+### Q6：更新了机场订阅后节点列表里出现了很多正常节点，为什么最上面几行“剩余流量：XX GB / 到期时间”被我点选后一直报错？
+**A**：订阅列表顶部通常包含两到三行**信息展示节点（Info Nodes）**，它们的服务器地址往往是无效占位 IP（如 `127.0.0.1` 或 `0.0.0.0`），仅用于在软件界面向你展示剩余流量和套餐到期日期，并不是真正用来翻墙的代理服务器！如果在策略组选到了这类展示行，所有连接必然立刻报错失败。只需跳过它们，向下选择带有国家/地区标识的正式节点（如「香港 01 [IEPL专线]」）即可。
+
+### Q7：同一个机场节点，白天测速 400Mbps 且 0 报错，为什么一到晚上 21:00 就疯狂出现 `TLS handshake timeout` 和 `i/o timeout`？
+**A**：这是典型的**公网国际出口晚高峰拥塞丢包特征**。你使用的节点底层很可能是普通直连线路或公网中转线路，白天民用宽带负载低时畅通无阻，一到晚间黄金时段三大运营商国际出口丢包率飙升，TCP 与 TLS 握手报文在半路大量丢失。这个问题无法通过修改本地客户端参数解决，唯一治本方案是更换采用企业级 **IEPL / IPLC 物理内网专线**的服务商，绕开拥堵的公网出口。
+
+### Q8：日志里出现 `warn: [DNS] resolve failed` 但网页却能正常打开，这种情况需要处理吗？
+**A**：如果所有业务访问正常，偶发的单条 DNS Warning 通常是浏览器预加载（Prefetch）了某个已失效的第三方广告追踪域名或被拦截域名的结果，属于正常防护表现，无需过度焦虑。但如果频繁刷屏导致 CPU 占用飙升或网页打开明显卡顿 3~5 秒，则说明主 DNS 列表里的某个上游服务器不通，需要清理掉不可达的 `nameserver`。
+
+### Q9：我在客户端同时导入了三家不同机场的订阅，能不能把它们合并起来用？为什么合并后老是报错？
+**A**：可以合并，但必须在支持多订阅整合的高级客户端中通过 **Proxy Providers（代理集合）** 模板或合规的覆写脚本进行合并，切忌直接把三个 YAML 文件生硬拼接在一起。硬拼接会导致 `mixed-port`、`dns`、`rules` 等全局字段重复覆盖报错，引发内核崩溃。对于普通用户，更建议保留多个独立配置文件，平时专注使用一条稳定主力专线（如光速云），主力维护时一键点击切换到备用订阅配置文件，架构更清晰、排障更容易。
+
+### Q10：已经按照指南排查了本地网络、校对了系统时间、更新了最新订阅、也重装了内核，依然全网超时怎么办？
+**A**：此时应使用工具确认是否为服务端阶段性全网割接或地区性阻断。可先登录机场官网查看最新工单公告（确认官网域名是否能直接打开）；若确认非本地环境问题且当前机场长期频繁失联、工单无人回复，应果断启动容灾备份方案，避免耽误日常开发与办公生产力。
+
+---
+
+## 五、告别反复排障：从底层物理专线源头消除 90% 的断连故障
+
+仔细复盘上面拆解的 12 类报错日志你会发现：**除了本地端口冲突与系统时间误差外，真正折磨用户的 `i/o timeout`、`TLS handshake timeout` 与 `connection reset by peer`，有绝大部分源于廉价公网线路在跨国出口处的丢包、端口封锁与 DPI 特征阻断**。
+
+如果你厌倦了每天晚上翻看红色报错日志、到处找备用节点，选择一条底层架构过硬的物理专线机场才是终极省心之道。本站综合多年实测表现首推 **[光速云](/docs/brands/guangsu)**：
+- **IEPL 物理内网双链路架构**：流量从国内 BGP 高防入口直入企业内网跨境光纤，**不过公网国际出口、不受晚高峰民用宽带 QoS 拥堵与公网 DPI 嗅探**，从物理底层将连接超时与重置报错降至极限；
+- **VLESS 现代协议栈与极简多端支持**：全系标配标准抗封锁现代协议与多平台官方自研客户端，小白免折腾一键连接，极客亦可直接导入 Clash Verge Rev / v2rayN / Shadowrocket / OpenClash；
+- **高性价比长线方案**：轻量版年付仅 ¥99（折合 ¥8.25/月），极速版月付 ¥25（168GB/月），更有行业独家的 **¥147 致敬斯诺克 147 永久套餐（247GB 永不过期）**，下单输入优惠码 **`AMM`** 立享优惠。
+
+<ObservatoryCard brandId="guangsu" />
+
+<AffiliateButton brandId="guangsu" brandName="光速云" coupon="AMM" size="large" />
+
+---
+
+:::tip 蜂巢知识库延伸阅读
+- 🏠 **返回百科总枢**：[2026 机场百科与网络排障全景问题大百科](/docs/faq/)
+- 🧭 **分流与隐私加固**：[智能分流与防泄漏深度解析：Fake-IP、GEOIP 分流冲突与 WebRTC IP 泄漏修复](/docs/faq/rules-and-dns)
+- 🛡️ **账号安全与防封**：[机场账号安全、设备并发限制、合租封号机制与海外合规支付全解答](/docs/faq/account-and-billing)
+- 🔬 **底层协议对比**：[VLESS vs Trojan vs Hysteria2：2026 主流抗封锁协议深度解密](/docs/observatory/protocols)
+:::

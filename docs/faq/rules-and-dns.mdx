@@ -1,0 +1,367 @@
+---
+title: 智能分流与防泄漏深度解析：Fake-IP、GEOIP 分流冲突与 WebRTC IP 泄漏修复
+description: 深度解决开启代理后国内微信B站变慢、访问海外网站依然显示国内真实IP、浏览器WebRTC泄露公网IP、公司学校内网域与代理规则冲突等疑难杂症，提供完整可复制的 Mihomo DNS Fallback 与 Fake-IP Filter YAML 实战模板与 10 个核心 FAQ。
+keywords: [Fake-IP配置, Mihomo DNS防泄漏, GEOIP分流冲突, WebRTC IP泄漏修复, 开代理国内变慢, 内网域名直连, Clash分流模板, DNS Fallback配置]
+---
+
+import ObservatoryCard from '@site/src/components/ObservatoryCard';
+import AffiliateButton from '@site/src/components/AffiliateButton';
+
+# 智能分流与防泄漏深度解析：Fake-IP、GEOIP 分流冲突与 WebRTC IP 泄漏修复
+
+> **核心架构结论 (Direct Answer)**：  
+> 代理网络好不好用，**“节点线路决定上限，分流与 DNS 决定下限”**。哪怕购买了物理延迟低至 22ms 的 **[光速云](/docs/brands/guangsu)** IEPL 专线，如果客户端分流规则与 DNS 引擎配置错乱，依然会出现**国内微信图片转圈、海外网站继续显示国内 IP、公司 OA 内网崩溃、甚至在跨境电商或 AI 登录时因 WebRTC / DNS 泄漏真实公网 IP 而被风控封号**。  
+> **现代防泄漏黄金架构由四大支柱构成**：  
+> 1. **运行模式**：永远保持 **Rule（规则模式）**，严禁日常挂载 Global（全局模式）；  
+> 2. **DNS 架构**：采用 **Mihomo `enhanced-mode: fake-ip` + 国内直连 DoH (`nameserver`) + 海外可信加密 DNS (`fallback` / `proxy-server-nameserver`)** 三段式防污染分流；  
+> 3. **内网豁免**：在 `fake-ip-filter` 中精确放行局域网、企业内部域名（`*.local`、`*.lan`）、NTP 校时及系统网络探测域名；  
+> 4. **驱动与浏览器防护**：桌面端开启 **TUN 虚拟网卡模式** 接管全系统 UDP/TCP 流量，同时在浏览器端禁用非代理 UDP 路由彻底堵死 **WebRTC IP 泄漏**。
+
+---
+
+## 一、智能分流与防泄漏全链路机制图解
+
+要彻底解决分流冲突与 IP 泄漏，必须看懂一条网络请求从浏览器发出到抵达目标服务器之间，客户端内核（以 2026 主流 **Mihomo** 为例）是如何处理 **DNS 查询** 与 **规则匹配** 的：
+
+```
+[应用程序发起访问: example.com]
+         │
+         ▼
+[1. DNS 拦截层 (Mihomo DNS 监听 1053 / TUN 劫持 53)]
+   ├── 命中 fake-ip-filter 白名单? ──(是)──> 走本地直连 DNS 返回真实 IP (如内网/NTP/STUN)
+   └── 未命中白名单? ──(否)──> 瞬间返回保留假 IP (198.18.x.x)，同时记录「假IP <-> 域名」映射表
+         │
+         ▼
+[2. 路由规则匹配引擎 (Rules Match：严格自上而下顺序匹配)]
+   ├── 1) DOMAIN-SUFFIX / GEOSITE (域名级规则优先，不触发远端真实 DNS 解析)
+   ├── 2) IP-CIDR / GEOIP (IP级规则，若域名未命中规则才需真实解析后查 IP 归属)
+   └── 3) MATCH (终极兜底规则：通常指向 🚀 节点选择 / 代理组)
+         │
+         ├──> 命中 DIRECT ──> [本地网卡直接向国内/内网真实 IP 建连]
+         └──> 命中 PROXY  ──> [加密封装「原始域名」发往海外专线节点，在境外完成最终解析与访问]
+```
+
+从上图可以直观发现：**分流故障的本质，几乎全部来源于“第 1 步 DNS 解析污染/错误分流”与“第 2 步规则顺序打架”**。
+
+---
+
+## 二、四大典型疑难杂症根因剖析与根治方案
+
+### 疑难杂症 1：为什么开启代理后，国内微信、淘宝、B站、网易云音乐反而明显变慢？
+
+#### 核心根因拆解
+1. **误开 Global（全局模式）**：这是新手第一大坑。全局模式下，哪怕访问 `bilibili.com` 或向北京的微信服务器发送图片，数据包也会先绕道香港或美国节点，再从海外公网绕回国内，往返延迟暴涨 10 倍以上，且白白损耗付费代理流量；
+2. **国内域名被海外 DNS 解析（CDN 调度灾难）**：即使开启了 Rule 规则模式，如果某些机场提供的旧配置把 `nameserver` 全部设成了 `8.8.8.8` 或 `1.1.1.1`，或者规则中错误触发了国外 DNS 解析国内域名，B站和淘宝的权威 DNS 会误以为你人在美国或新加坡，从而给你返回位于海外的 CDN 缓存节点 IP！你虽然走的是 `DIRECT` 直连，却要从家里直连海外 CDN 服务器，卡顿在所难免；
+3. **Rule 规则顺序倒置引发多余 DNS 解析**：如果在 `rules:` 列表中过早放置了一条 `GEOIP,CN,DIRECT` 之前的未命中规则，或者把 `GEOSITE,CN,DIRECT` 放到了末尾，内核就必须先去境外做真实 DNS 解析才能核对 IP 归属，拖慢首屏响应（俗称“DNS 泄露式降速”）；
+4. **机场自带规则库过旧**：未收录最新出现的国内视频分流域名、网盘加速域名或国内 AI 大模型域名（如 DeepSeek、Kimi、豆包等）。
+
+#### 分步根治方案
+1. 在客户端「代理 (Proxies)」页面顶栏，确认运行模式严格锁定为 **`Rule`（规则模式）**；
+2. 升级客户端的 **GeoSite / GeoIP 数据库**（在 Clash Verge Rev 的设置中开启 GeoData 自动更新，推荐选择 MetaCubeX 官方精简高性能数据库）；
+3. 配置 **Mihomo 国内直连 DNS (`nameserver`) + 策略分流 (`nameserver-policy`)**，强制所有 `geosite:cn` 与 `geosite:private` 域名仅通过 `223.5.5.5` / `119.29.29.29` 解析，绝不交给境外 DNS 处理；
+4. 检查并添加常见国内大流量软件的直连放行（如微信小程序、百度网盘、阿里云盘、迅雷 P2P、游戏更新器），避免它们走代理占用带宽并触发机场审计。
+
+---
+
+### 疑难杂症 2：明明连上了海外节点，为什么访问海外网站依然显示真实国内 IP，或定位在中国？
+
+#### 核心根因拆解
+1. **漏开了客户端接入开关**：在电脑端仅仅点击了节点测速，却忘记在「设置」中打开 **「系统代理 (System Proxy)」** 或 **「TUN 模式」**；
+2. **工具/命令行无视系统代理**：只开了“系统代理”而未开 TUN 模式时，终端 `curl`、`git`、Node.js、Docker、Python 脚本以及非 Chromium 内核客户端全部走物理网卡直连，访问 `ipinfo.io` 自然显示你家宽带的国内 IP；
+3. **浏览器启用了内置安全 DNS (DoH) 绕过规则**：Chrome、Edge 与 Firefox 现代版本默认开启了“使用安全 DNS”或自带 DoH 提供商。如果浏览器绕过本地系统 DNS 直接把加密 DNS 包发往国内 DoH（如阿里 DNS），或者与系统代理配合异常，在 Redir-Host 模式下极易引发分流判定失效；
+4. **IPv6 泄漏直连通道**：国内三大运营商已全面普及家庭宽带 IPv6。当目标海外网站（如 Google、Cloudflare 托管站点）同时具备 `A`（IPv4）和 `AAAA`（IPv6）记录，而你的代理配置或机场节点未妥善接管 IPv6 时，操作系统可能优先使用本地物理网卡的公网 IPv6 直连或探测，导致部分 IP 检测站同时打印出你的国内 IPv6 地址；
+5. **分流规则把特定检测站或目标站点划入了 DIRECT**：某些老旧规则集误将 Cloudflare CDN 网段或部分海外测试站标为直连，或你在策略组中手误把 `PROXY` / `国外媒体` 选成了 `DIRECT`。
+
+#### 分步根治方案
+1. **全流量接管**：在客户端安装服务模式并启用 **TUN 模式**，确保浏览器以外的应用和底层 UDP 请求全部经过虚拟网卡进入内核分流；
+2. **关闭浏览器独立 DoH**：进入 Chrome/Edge 设置 -> 隐私与安全 -> 安全 -> 将 **“使用安全 DNS”关闭**（交由代理客户端统一安全接管加密解析）；
+3. **合理收敛 IPv6**：若机场节点本身明确不提供双栈 IPv6 出口，在客户端覆写配置中设置 `ipv6: false`，彻底杜绝本地 IPv6 越权直连与泄露；
+4. **核对策略组选点**：逐一检查主代理组、AI 组、流媒体组，确保均指向真实的海外节点（如 [光速云](/docs/brands/guangsu) 的新加坡/美国/香港节点），而非 `DIRECT`。
+
+---
+
+### 疑难杂症 3：浏览器 WebRTC 泄露真实公网 IP（跨境电商与 AI 注册重灾区）
+
+#### 什么是 WebRTC IP 泄漏？为什么开着全局代理依然会暴露？
+**WebRTC (Web Real-Time Communication)** 是浏览器原生集成的实时音视频与数据通信接口。为了在视频会议或 P2P 传输时寻找最短路径，网页上的 JavaScript 代码可以主动调用浏览器的 `RTCPeerConnection` API，向第三方 **STUN 服务器**（如 `stun.l.google.com:19302`）发送 **UDP 穿透探测包**。
+
+致命漏洞在于：**早期的 HTTP/SOCKS5 系统代理主要拦截 TCP 网页请求，许多浏览器默认允许 WebRTC 的 UDP STUN 探测包直接绕过系统代理，经由本地物理网卡直接发出！** 结果就是：网页服务端在 HTTP 请求头里看到你是美国原生节点 IP，但一转头通过 WebRTC STUN 回传却抓到了你深圳电信宽带的真实公网 IP 以及局域网内网 IP（`192.168.x.x`）。对于 Amazon、TikTok Shop、PayPal、Stripe 或 OpenAI 而言，这种“IP 地址自相矛盾”几乎等同于实锤欺诈或伪装环境，直接触发封店与封号。
+
+#### 三步彻底检测与修复 WebRTC IP 泄漏
+1. **泄漏检测验证**：
+   打开浏览器访问 `browserleaks.com/webrtc` 或 `ipleak.net`，重点观察 **WebRTC Leak Test** 栏目：如果下方出现了你本地宽带运营商的真实公网 IP 或局域网地址，说明已发生严重泄漏。
+2. **网络层封堵（客户端必做）**：
+   - 在 **Clash Verge Rev** 中开启 **TUN 模式**（接管三层所有 UDP 报文，不让浏览器绕过代理直发 UDP）；
+   - 在规则列表最顶部强制阻断常见公共 STUN 端口或将其全部导向代理出口（切勿放行 STUN 直连 `DIRECT`）：
+     - 将 `DST-PORT,3478,PROXY`、`DST-PORT,19302,PROXY` 或直接用 `REJECT` 策略拒绝非必要的浏览器 STUN 探测（若不需要网页版 P2P 视频通话，直接 `REJECT` 最安全）。
+3. **应用层封堵（浏览器必做）**：
+   - **Firefox**：在地址栏输入 `about:config`，搜索 `media.peerconnection.enabled` 并双击改为 `false`（100% 彻底禁用 WebRTC）；
+   - **Chrome / Edge**：由于 Chromium 没有直接的一键开关，可通过安装开源轻量扩展（如 **WebRTC Control** 或 **uBlock Origin** 高级隐私设置中的“阻止通过 WebRTC 泄露本地 IP 地址”），将 WebRTC 策略强制锁定为 `disable_non_proxied_udp`（仅允许通过代理连接，禁止直连 UDP）。修复后刷新 `browserleaks.com/webrtc` 验证，应仅显示代理节点 IP 或完全无公网 IP 泄露。
+
+---
+
+### 疑难杂症 4：公司内网、学校校园网私有域名与代理规则冲突（OA/GitLab/打印机打不开）
+
+#### 核心根因拆解
+在企业办公或高校科研环境下，开启 **Fake-IP 模式** 常常导致以下怪象：
+- 公司的内部系统（如 `oa.corp.local`、`gitlab.internal`、`jenkins.company.net`）或者 NAS 地址 `nas.home.arpa` 无法打开，浏览器报连接超时或证书错误；
+- 飞书、企业微信、钉钉在连接公司内网认证网关时反复掉线；
+- 局域网网络共享打印机或 SMB 共享文件夹失联。
+
+根本原因在于两点：
+1. **Fake-IP 机制拦截了内网域名**：客户端截获了 `oa.corp.local` 的 DNS 查询，直接返回了一个 `198.18.0.25` 假地址，而该内网域名无法在公共 DNS 解析，公司安全网关也不认识 `198.18` 地址；
+2. **公司内部 DNS 服务器与代理 DNS 冲突**：很多内网私有域名只能由公司 DHCP 下发的路由器内网 DNS（例如 `10.10.0.1`）才能解析成 `10.10.x.x` 私有 IP，若代理客户端强行用 `223.5.5.5` 去查公司内网域名，阿里 DNS 只会返回“域名不存在（NXDOMAIN）”。
+
+#### 分步根治方案
+1. **将私有内网域名加入 `fake-ip-filter`**：所有 `.local`、`.lan`、`.internal`、`.arpa`、`.home` 以及你所在企业的专属根域名（如 `+.mycorp.com`）必须放进 `fake-ip-filter`，强制内核跳过 Fake-IP 返回真实 IP；
+2. **配置内网专属 `nameserver-policy`**：在 Mihomo 配置中指定凡是匹配公司内网域名的 DNS 请求，**交还给 `system`（操作系统 DHCP 获取的局域网 DNS）解析**；
+3. **确保私有 IP 网段永远直连**：在 `rules:` 最顶部加入内网局域网规则：
+   - `IP-CIDR,10.0.0.0/8,DIRECT,no-resolve`
+   - `IP-CIDR,172.16.0.0/12,DIRECT,no-resolve`
+   - `IP-CIDR,192.168.0.0/16,DIRECT,no-resolve`
+   - `GEOIP,PRIVATE,DIRECT,no-resolve`
+4. **TUN 模式下排除内网网段路由（`route-exclude-address`）**：在 Mihomo 的 `tun:` 配置段中，把公司特殊的 VPN 网段或内网网段写入 `route-exclude-address`，让数据包连虚拟网卡都不进，直接从物理网卡直出，延迟为 0ms。
+
+---
+
+## 三、2026 终极实战模板：Mihomo DNS Fallback 与 Fake-IP Filter 完整配置
+
+以下是一份经过实验室实测验证、**可直接用于 Clash Verge Rev（全局扩展覆写脚本 / Merge 配置）或 OpenClash 的生产级 Mihomo YAML 配置模板**。它完美解决了 DNS 泄漏、国内 CDN 调度变慢、Windows 小地球断网提示、企业内网冲突及游戏主机认证问题：
+
+```yaml
+# =====================================================================
+# 机场 cyou 实验室 2026 生产级 Mihomo (Clash Meta) DNS 与防泄漏实战模板
+# 适用客户端：Clash Verge Rev / FlClash / OpenClash (Mihomo 内核)
+# =====================================================================
+
+ipv6: false # 如机场节点明确支持 IPv6 出口可改为 true；否则建议保持 false 防止双栈泄漏
+
+tun:
+  enable: true
+  stack: system # Windows/Linux 推荐 system 或 mixed；追求极致兼容性选 mixed
+  dns-hijack:
+    - "any:53"
+    - "tcp://any:53"
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: true
+  # 排除公司特殊私有网段与本地回环，避免内网工具与虚拟网卡冲突
+  route-exclude-address:
+    - 192.168.0.0/16
+    - 172.16.0.0/12
+    - 10.0.0.0/8
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  ipv6: false
+  respect-rules: true # 关键参数：让 DNS 连接遵循下方代理分流规则，彻底防止代理链条自身泄漏
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+
+  # 1. 引导 DNS (Default Nameserver)：仅用于解析下方 DoH/DoT 域名及节点自身域名
+  # 必须填写纯数字 IP 且为国内高可用 DNS，否则会陷入死锁
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+    - system # 自动保留当前局域网/校园网下发的本地 DNS
+
+  # 2. 代理节点服务器专用 DNS：防止机场中转域名被国外 DNS 解析或陷入递归死循环
+  proxy-server-nameserver:
+    - https://223.5.5.5/dns-query
+    - https://doh.pub/dns-query
+
+  # 3. 主解析 DNS (Nameserver)：国内域名直连查询，保证阿里/腾讯/B站匹配国内最近 CDN
+  nameserver:
+    - https://223.5.5.5/dns-query
+    - https://doh.pub/dns-query
+
+  # 4. 境外防污染后备 DNS (Fallback)：指定走代理通道解析，彻底杜绝 DNS 泄漏与投毒
+  fallback:
+    - "https://1.1.1.1/dns-query#🚀 节点选择"
+    - "https://dns.google/dns-query#🚀 节点选择"
+    - "tls://8.8.8.8:853#🚀 节点选择"
+
+  # 5. Fallback 过滤机制：决定哪些域名解析结果需要校验或强制走 Fallback
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    geosite:
+      - gfw
+    ipcidr:
+      - 240.0.0.0/4
+      - 0.0.0.0/32
+    domain:
+      - "+.google.com"
+      - "+.openai.com"
+      - "+.anthropic.com"
+      - "+.youtube.com"
+      - "+.github.com"
+
+  # 6. 精细化域名 DNS 策略：强绑定国内、企业内网与海外高风控域名解析出口
+  nameserver-policy:
+    "geosite:private": system
+    "*.local,*.lan,*.internal,+.corp.example.com": system
+    "geosite:cn":
+      - https://223.5.5.5/dns-query
+      - https://doh.pub/dns-query
+    "geosite:geolocation-!cn":
+      - "https://1.1.1.1/dns-query#🚀 节点选择"
+      - "https://dns.google/dns-query#🚀 节点选择"
+
+  # 7. Fake-IP 白名单豁免列表：下列域名跳过虚拟假 IP，直接返回真实解析地址
+  fake-ip-filter:
+    # 局域网与企业内网保留后缀
+    - "*.lan"
+    - "*.local"
+    - "*.internal"
+    - "*.home.arpa"
+    - "localhost.ptlogin2.qq.com"
+    - "+.corp.example.com" # 替换为你自己的公司内网根域名
+
+    # Windows / Apple / Android 系统联网状态探测 (消除任务栏小地球感叹号)
+    - "*.msftconnecttest.com"
+    - "*.msftncsi.com"
+    - "captive.apple.com"
+    - "connectivitycheck.gstatic.com"
+    - "network-test.debian.org"
+
+    # NTP 时间同步服务器 (防止时间漂移导致 VMess/TLS 认证失败)
+    - "time.*.com"
+    - "time.*.gov"
+    - "time.*.edu.cn"
+    - "time.*.apple.com"
+    - "ntp.*.com"
+    - "*.ntp.org.cn"
+    - "pool.ntp.org"
+
+    # 联机游戏主机认证与国内语音大厅加速
+    - "*.srv.nintendo.net"
+    - "*.stun.playstation.net"
+    - "xbox.*.microsoft.com"
+    - "*.xboxlive.com"
+    - "*.battlenet.com.cn"
+    - "+.stun.*.*"
+    - "+.stun.*.*.*"
+    - "+.stun.*.*.*.*"
+
+    # 国内常用直连音频/P2P 域名
+    - "*.music.163.com"
+    - "*.kuwo.cn"
+    - "*.kugou.com"
+    - "WORKGROUP"
+
+# =====================================================================
+# 规则优先级范例：严格遵守“内网直连 -> 阻断STUN泄漏 -> 国外AI/媒体 -> 国内直连 -> 兜底”
+# =====================================================================
+rules:
+  # 1. 局域网与私有 IP 强制直连（务必加 no-resolve 避免不必要 DNS 解析）
+  - GEOSITE,private,DIRECT
+  - GEOIP,private,DIRECT,no-resolve
+
+  # 2. 封堵浏览器 WebRTC STUN 探测泄漏（如不需要网页P2P通话强烈建议 REJECT）
+  - DOMAIN-KEYWORD,stun,REJECT
+  - DST-PORT,3478,REJECT
+  - DST-PORT,19302,REJECT
+
+  # 3. 企业内网域名强制直连
+  - DOMAIN-SUFFIX,corp.example.com,DIRECT
+
+  # 4. 海外核心 AI 与流媒体精准分组（建议固定独立纯净节点组）
+  - GEOSITE,openai,🤖 AI 专用节点
+  - GEOSITE,anthropic,🤖 AI 专用节点
+  - GEOSITE,youtube,🎬 流媒体节点
+  - GEOSITE,netflix,🎬 流媒体节点
+
+  # 5. 常规海外服务优先按域名规则走代理（避免先查 DNS）
+  - GEOSITE,geolocation-!cn,🚀 节点选择
+
+  # 6. 国内域名与国内 IP 放行直连
+  - GEOSITE,cn,DIRECT
+  - GEOIP,CN,DIRECT
+
+  # 7. 终极兜底匹配
+  - MATCH,🚀 节点选择
+```
+
+:::tip 如何在 Clash Verge Rev 中无痛应用上述模板？
+切勿直接修改随时会被「更新订阅」覆盖的原始订阅 YAML！正确做法是在 Clash Verge Rev 的 **「订阅 (Profiles)」** 页面，右键你正在使用的订阅（如光速云订阅），点击 **「扩展配置 (Merge)」** 或 **「全局扩展配置」**，将上方的 `dns`、`tun` 与前置规则追加进去。这样每次机场更新节点列表时，你的防泄漏规则依然永久保留生效！
+:::
+
+---
+
+## 四、分流与防泄漏实测验证清单
+
+配置完成后，请按顺序执行以下 **4 项可观测验证**，确认每一项全部通过：
+
+| 验证项目 | 验证工具 / 测试地址 | 合格绿灯表现 | 不合格红灯信号（需复查） |
+| :--- | :--- | :--- | :--- |
+| **1. Fake-IP 机制验证** | 终端运行 `ping www.google.com` | 返回解析 IP 为 `198.18.x.x`，响应时间低于 1ms | 返回真实公网 IP 或 `127.0.0.1` / `0.0.0.0` 污染地址 |
+| **2. 国内高速直连验证** | 访问 `ip.sb` 或国内测速站 / 打开 B 站 4K | B 站秒开满速且不消耗机场代理流量 | 国内测速显示香港/美国运营商，或客户端日志中微信/淘宝走代理 |
+| **3. DNS 防泄漏验证** | 访问 `dnsleaktest.com` (选择 Extended Test) | 列表内**仅出现节点所在地国家的 Cloudflare / Google DNS** | 列表中夹杂着“China Telecom / China Unicom / Alibaba”等国内 DNS |
+| **4. WebRTC 防泄漏验证** | 访问 `browserleaks.com/webrtc` | 仅显示代理节点出口 IP，或 Public/Local IP 均显示 `n/a` | 出现家庭宽带真实公网 IP 或本地物理网卡局域网段 |
+
+---
+
+## 五、智能分流与防泄漏高频 FAQ（10 问 10 答）
+
+### Q1：Fake-IP 和 Redir-Host 两种 DNS 模式到底有什么本质区别？2026 年普通用户应该选哪一个？
+**A**：在 **Redir-Host 模式**下，当浏览器请求 `youtube.com` 时，客户端必须先耗费几十到几百毫秒向远端或本地 DNS 询问真实 IP，拿到真实 IP 后再匹配规则决定走哪条线——这不仅拖慢网页首屏打开速度，还极易因为国内 DNS 抢答污染而拿到假 IP。  
+而在 **Fake-IP 模式**下，客户端收到 DNS 请求瞬间直接伪造一个 `198.18.x.x` 假 IP 丢给浏览器（耗时接近 0ms），随后直接把 `youtube.com` 这个**原始域名**封装进加密隧道交由境外专线节点去解析访问，彻底绕开了本地 DNS 污染，网页加载速度提升明显。2026 年所有主流场景（Clash Verge Rev、OpenClash、Shadowrocket）均强烈首选 **Fake-IP 模式**。
+
+### Q2：为什么规则里 `GEOIP,CN,DIRECT` 后面经常跟着一个 `,no-resolve` 参数？不加会怎样？
+**A**：`no-resolve` 的含义是**“如果当前请求只是一个还没解析成 IP 的域名，在匹配到这条 IP 类规则时，不要为了凑 IP 而主动去触发一次本地 DNS 解析，直接跳过继续往下走”**。假设你正在访问一个未收录在 Geosite 里的冷门海外域名，如果前面的 `GEOIP,CN,DIRECT` 没加 `no-resolve`，内核就会被迫先在本地发起一次 DNS 查询拿到 IP 后再判断它是不是中国 IP——这不仅毫无必要地把海外域名泄露给了本地 DNS（造成 DNS Leak），还会大幅拖慢打开速度。所有放在域名规则后面的 `GEOIP` 和 `IP-CIDR` 规则，如果目标不是专门依赖 IP 匹配，一律建议加上 `no-resolve`。
+
+### Q3：为什么我把 `dnsleaktest.com` 打开检测，依然能看到一两个国内 DNS 服务器？
+**A**：这通常是“浏览器自带安全 DNS”或“本地备用 DNS 并发抢答”造成的。第一，检查 Chrome/Edge 浏览器设置中的安全 DNS 是否关闭；第二，检查 Mihomo 配置中的 `dns.respect-rules` 是否设为 `true`，以及 `fallback` DNS 后面是否明确带上了代理组标签（例如 `#🚀 节点选择`）；第三，如果你使用的是系统代理而非 TUN 模式，部分不走代理的 UDP 53 端口请求可能会漏给物理网卡直连发出，开启 **TUN 模式** 接管全局 UDP 53 端口即可彻底根治。
+
+### Q4：开启 Fake-IP 模式后，为什么本地使用 `ping` 或 `nslookup` 测试域名全都会变成 `198.18.0.x`？这会影响我用 SSH 或终端开发吗？
+**A**：不会影响正常上网，反而代表 Fake-IP 正在正常工作。当你 `ssh user@github.com` 或 `git pull` 时，只要开启了 **TUN 模式**，虽然终端拿到的是 `198.18.0.x`，但当数据包进入 TUN 网卡后，Mihomo 内核会立刻根据内部映射表把 `198.18.0.x` 还原回真实的 `github.com` 域名并加密转发给节点。唯一需要注意的是，如果你确实需要在终端里通过 `dig` / `nslookup` 真实调试某个域名的公网真实解析记录（例如运维排查 A 记录生效情况），请暂时关闭代理，或显式指定远端 DNS 查询（如 `nslookup example.com 223.5.5.5`）。
+
+### Q5：我在规则里想让公司的一个特定域名（或某个国内网盘）绝对不走代理，应该怎么写规则最稳妥？
+**A**：在规则最顶部优先使用精准度最高的域名后缀匹配。例如公司域名是 `internal-portal.mycompany.com`，可在 Clash Verge Rev 扩展配置规则最前面加上：
+- `DOMAIN-SUFFIX,mycompany.com,DIRECT`
+这样哪怕该域名解析出的 IP 位于海外 AWS 机房（被 GEOIP 误判为国外），也会在第一条规则就被精准拦截放行直连，绝不会走代理。同时别忘了把 `+.mycompany.com` 加入 `fake-ip-filter`。
+
+### Q6：使用 Shadowrocket（小火箭）时，怎么配置才能防止国内 App 走流量、同时避免 DNS 泄漏？
+**A**：在 Shadowrocket 中，务必将首页的 **「全局路由 (Global Routing)」** 设为 **「配置 (Config)」**（绝不要选「代理」或「直连」）。接着在底部的「配置」标签页中，优先使用机场提供的标准分流规则文件，或启用业内公认的精简白名单分流配置；在「设置 -> DNS」中保持系统默认配合规则内加密 DoH 即可。另外切勿在小火箭中手动添加几十万条冗长的广告屏蔽大规则，避免突破 iOS VPN 扩展内存限制被后台强杀。详见 [iOS 深度配置指南](/docs/clients/ios)。
+
+### Q7：为什么有些国内软件（如百度网盘、迅雷、阿里云盘、Steam 国内区下载）在开启 TUN 模式后依然占用了我的机场节点流量？
+**A**：客户端虽然按域名放行了网盘网页与登录接口，但网盘和游戏客户端在高速下载资源时，往往直接连接成百上千个分布在不同地区的 P2P 边缘节点纯 IP 地址（不经过域名请求），或者连向了境外的 CDN 加速节点（如 Steam 使用海外下载节点）。如果这些纯 IP 不在国内 IP 段中，就会落入末尾的 `MATCH,PROXY` 兜底规则从而狂吃节点流量。  
+**解决办法**：第一，大文件下载时将 Steam 下载区锁定在国内（如上海/广州），或在下载大型单机游戏、网盘几十 GB 文件时临时关闭代理或将迅雷/网盘进程名加入 `PROCESS-NAME` 直连规则（如 `PROCESS-NAME,baidunetdisk.exe,DIRECT`）。
+
+### Q8：什么是 `PROCESS-NAME` 进程分流规则？在 Windows / macOS 下如何利用它精准控制软件走不走代理？
+**A**：Mihomo 内核支持在桌面端识别发出每个网络连接的本地进程文件名！例如你希望 Chrome 走代理、微信和迅雷永远直连、而某个特定的终端工具走美国节点，只需在 `rules:` 顶部加入：
+- `PROCESS-NAME,WeChat.exe,DIRECT`
+- `PROCESS-NAME,baidunetdisk.exe,DIRECT`
+- `PROCESS-NAME,Code.exe,🤖 AI 专用节点`
+这是解决“软件直连顽疾”最暴力的杀手锏，但在路由器（OpenClash）上无法使用，因为路由器看不到电脑内部进程名。
+
+### Q9：我在配置 `dns.fallback` 时看到有人写 `https://1.1.1.1/dns-query#PROXY`，这个 `#` 号后面的内容是什么意思？
+**A**：在 Mihomo (Clash Meta) 内核中，`#` 号后面的名称是 **指定该 DNS 服务器必须通过哪个策略组出站**。例如 `https://1.1.1.1/dns-query#🚀 节点选择` 明确指示内核：向 `1.1.1.1` 发起的 DoH 解析请求**必须走名为 `🚀 节点选择` 的代理组隧道转发出去**，而不能从本地物理网卡直接明文或直连发往 `1.1.1.1`！请注意 `#` 后面的名字必须与你订阅配置文件里的实际策略组名称一字不差（包括 Emoji 空格）。
+
+### Q10：为什么我按教程配好了完美分流和防泄漏，OpenAI / Claude 还是会提示风控阻断？
+**A**：分流与防泄漏（DNS + WebRTC + IPv6 收敛）保证了“你的客户端没有暴露中国真实身份”，但这只是风控合格的前半程。后半程取决于**你选择的节点落地 IP 本身的纯净度**。如果机场落地机用的是被成千上万人挤爆的廉价机房共享 IP（Scamalytics 欺诈分极高），即使零泄漏，OpenAI 与 Cloudflare 依然会无情拦截。因此，“洁净的客户端防泄漏配置”必须搭配“高纯净度的专线原生落地节点”才能实现真正稳定的生产力体验。
+
+---
+
+## 六、稳定纯净专线推荐：防泄漏配置的黄金拍档
+
+要发挥出上述 Mihomo 完美分流与防泄漏架构的 100% 威力，你需要一家**同时具备物理专线稳定性与高纯净原生落地 IP 池**的机场服务商。本站网络可观测实验室连续多年实测验证，首推 **[光速云](/docs/brands/guangsu)**：
+
+- **分流友好与全端兼容**：订阅天然适配 Clash Verge Rev、OpenClash、Shadowrocket 与 v2rayN，配合内置清晰的策略分组，套用上方 Mihomo 防泄漏模板即可秒级生效；
+- **IEPL 双链路物理专线 + 原生落地 IP 池**：香港、台湾、日本、新加坡与美国核心集群采用高纯净度原生落地资源，轻松应对 ChatGPT、Claude 与 4K 流媒体风控，避免节点自身拖后腿；
+- **全场景低门槛套餐**：轻量版年付仅 ¥99（折合 ¥8.25/月），极速版月付 ¥25（168GB/月），更有行业罕见的 **¥147 致敬斯诺克 147 永久套餐（247GB 永不过期）** 可作永久备用底牌，下单输入优惠码 **`AMM`** 立享优惠。
+
+<ObservatoryCard brandId="guangsu" />
+
+<AffiliateButton brandId="guangsu" brandName="光速云" coupon="AMM" size="large" />
+
+---
+
+:::tip 蜂巢知识库延伸阅读
+- 🏠 **返回百科总枢**：[2026 机场百科与网络排障全景问题大百科](/docs/faq/)
+- 🔌 **报错代码诊断**：[代理连接报错全收录：Dial Error、Timeout、EOF 与 TLS 握手失败分步排障手册](/docs/faq/connection-errors)
+- 🛡️ **账号安全与防封**：[机场账号安全、设备并发限制、合租封号机制与海外合规支付全解答](/docs/faq/account-and-billing)
+- 🤖 **AI 与流媒体专题**：[2026 ChatGPT、Claude 与 Gemini 专属加速机场深度选型指南](/docs/scenarios/ai-accelerate)
+:::

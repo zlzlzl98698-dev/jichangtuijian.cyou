@@ -124,6 +124,61 @@ const sidebars: SidebarsConfig = {
       label: '🌐 800篇内容集群与标题矩阵',
     },
   ],
+
+  rankingsSidebar: [
+    {
+      type: 'doc',
+      id: 'rankings/index',
+      label: '🥇 42家机场权威推荐总览',
+    },
+    'rankings/price-tiers',
+    'rankings/network-types',
+    'rankings/speed-latency',
+  ],
+
+  freeNodesSidebar: [
+    {
+      type: 'doc',
+      id: 'free-nodes/index',
+      label: '🎁 免费节点与公开代理百科',
+    },
+    'free-nodes/sources-and-subscriptions',
+    'free-nodes/security-risks',
+    'free-nodes/free-vs-paid',
+  ],
+
+  faqSidebar: [
+    {
+      type: 'doc',
+      id: 'faq/index',
+      label: '❓ 机场百科与排障 FAQ 全书',
+    },
+    'faq/connection-errors',
+    'faq/rules-and-dns',
+    'faq/account-and-billing',
+  ],
+
+  blacklistSidebar: [
+    {
+      type: 'doc',
+      id: 'blacklist-scam/index',
+      label: '🚨 机场跑路预警与避坑防御',
+    },
+    'blacklist-scam/warning-signs',
+    'blacklist-scam/case-studies',
+    'blacklist-scam/disaster-recovery',
+  ],
+
+  freeTrialSidebar: [
+    {
+      type: 'doc',
+      id: 'free-trial/index',
+      label: '⚡ 免费试用与新人体验专区',
+    },
+    'free-trial/instant-trials',
+    'free-trial/low-cost-testing',
+    'free-trial/trial-to-paid-guide',
+  ],
 };
 
 export default sidebars;
