@@ -100,6 +100,12 @@ const config: Config = {
           label: '📡 协议与可观测实验室',
         },
         {
+          type: 'docSidebar',
+          sidebarId: 'architectureSidebar',
+          position: 'left',
+          label: '🏛️ 架构与知识图谱',
+        },
+        {
           href: 'https://sahude.gsyvipaff.com/#/?code=keqgvT5Y',
           label: '🚀 主推·光速云',
           position: 'right',
@@ -140,11 +146,13 @@ const config: Config = {
           ],
         },
         {
-          title: '网络可观测指南',
+          title: '网络可观测与全站架构',
           items: [
             { label: 'IEPL vs IPLC 专线硬核技术解密', to: '/docs/observatory/iepl-vs-iplc' },
             { label: 'VLESS vs Trojan vs Hysteria2', to: '/docs/observatory/protocols' },
             { label: '晚高峰测速方法与防坑指南', to: '/docs/observatory/speedtest-guide' },
+            { label: '全站架构与蜂巢内链拓扑', to: '/docs/architecture' },
+            { label: '800篇内容集群与标题矩阵', to: '/docs/architecture/topic-clusters' },
             { label: '免责声明与合规推广说明', to: '/docs/observatory/disclaimer' },
           ],
         },

@@ -111,6 +111,19 @@ const sidebars: SidebarsConfig = {
     'observatory/speedtest-guide',
     'observatory/disclaimer',
   ],
+
+  architectureSidebar: [
+    {
+      type: 'doc',
+      id: 'architecture/index',
+      label: '🏛️ 架构与蜂巢内链拓扑',
+    },
+    {
+      type: 'doc',
+      id: 'architecture/topic-clusters',
+      label: '🌐 800篇内容集群与标题矩阵',
+    },
+  ],
 };
 
 export default sidebars;
