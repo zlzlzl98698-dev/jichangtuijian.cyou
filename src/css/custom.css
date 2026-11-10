@@ -4,21 +4,27 @@
  */
 
 :root {
-  --ifm-color-primary: #0ea5e9;
-  --ifm-color-primary-dark: #0284c7;
-  --ifm-color-primary-darker: #0369a1;
-  --ifm-color-primary-darkest: #075985;
-  --ifm-color-primary-light: #38bdf8;
-  --ifm-color-primary-lighter: #7dd3fc;
-  --ifm-color-primary-lightest: #bae6fd;
+  --ifm-color-primary: #38bdf8;
+  --ifm-color-primary-dark: #0ea5e9;
+  --ifm-color-primary-darker: #0284c7;
+  --ifm-color-primary-darkest: #0369a1;
+  --ifm-color-primary-light: #7dd3fc;
+  --ifm-color-primary-lighter: #bae6fd;
+  --ifm-color-primary-lightest: #e0f2fe;
   --ifm-code-font-size: 92%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
-  --ifm-background-color: #0b1120;
+  --docusaurus-highlighted-code-line-bg: rgba(56, 189, 248, 0.15);
+  --ifm-background-color: #080d1a;
   --ifm-background-surface-color: #0f172a;
+  --ifm-text-color: #e2e8f0;
+  --ifm-heading-color: #f8fafc;
   --ifm-font-family-base: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --ifm-font-family-monospace: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  --ifm-navbar-background-color: rgba(11, 17, 32, 0.95);
-  --ifm-footer-background-color: #070d19;
+  --ifm-navbar-background-color: rgba(8, 13, 26, 0.96);
+  --ifm-navbar-link-color: #f1f5f9;
+  --ifm-navbar-link-hover-color: #38bdf8;
+  --ifm-menu-color: #cbd5e1;
+  --ifm-menu-color-active: #38bdf8;
+  --ifm-footer-background-color: #050811;
 }
 
 [data-theme='dark'], :root {
@@ -33,7 +39,11 @@
   --ifm-background-surface-color: #0f172a;
   --ifm-text-color: #e2e8f0;
   --ifm-heading-color: #f8fafc;
-  --ifm-navbar-background-color: rgba(8, 13, 26, 0.95);
+  --ifm-navbar-background-color: rgba(8, 13, 26, 0.96);
+  --ifm-navbar-link-color: #f1f5f9;
+  --ifm-navbar-link-hover-color: #38bdf8;
+  --ifm-menu-color: #cbd5e1;
+  --ifm-menu-color-active: #38bdf8;
   --ifm-footer-background-color: #050811;
   --docusaurus-highlighted-code-line-bg: rgba(56, 189, 248, 0.15);
 }
@@ -43,22 +53,104 @@ body {
   color: #e2e8f0;
 }
 
+/* Navbar Dark Observatory Styling */
 .navbar {
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(56, 189, 248, 0.15);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.25);
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.6);
+  background-color: rgba(8, 13, 26, 0.96) !important;
+}
+
+.navbar__brand {
+  margin-right: 20px;
+}
+
+.navbar__logo {
+  height: 32px;
+  width: 32px;
+  margin-right: 10px;
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.6));
 }
 
 .navbar__title {
   font-weight: 800;
+  font-size: 1.15rem;
   letter-spacing: 0.04em;
   background: linear-gradient(90deg, #38bdf8 0%, #818cf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  display: inline-block;
+}
+
+/* High-contrast, bright, ultra-crisp navbar links */
+.navbar__item, 
+.navbar__link {
+  color: #f8fafc !important;
+  font-weight: 600;
+  font-size: 0.92rem;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  letter-spacing: 0.01em;
+}
+
+.navbar__link:hover {
+  color: #38bdf8 !important;
+  background-color: rgba(56, 189, 248, 0.12);
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+}
+
+.navbar__link--active {
+  color: #38bdf8 !important;
+  background-color: rgba(56, 189, 248, 0.15);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+}
+
+/* Special CTA Button for "🚀 主推·光速云" in navbar */
+a.navbar__link[href*="sahude.gsyvipaff.com"] {
+  background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%) !important;
+  color: #ffffff !important;
+  font-weight: 800 !important;
+  padding: 6px 16px !important;
+  border-radius: 9999px !important;
+  box-shadow: 0 0 16px rgba(2, 132, 199, 0.6) !important;
+  margin-left: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25) !important;
+}
+
+a.navbar__link[href*="sahude.gsyvipaff.com"]:hover {
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.9) !important;
+  transform: translateY(-1px);
+}
+
+/* Sidebar Styling */
+.theme-doc-sidebar-menu {
+  font-size: 0.92rem;
+}
+
+.menu__link {
+  color: #cbd5e1;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.menu__link:hover {
+  color: #38bdf8;
+  background-color: rgba(56, 189, 248, 0.08);
+}
+
+.menu__link--active {
+  color: #38bdf8 !important;
+  font-weight: 700;
+  background-color: rgba(56, 189, 248, 0.15) !important;
+  border-left: 3px solid #38bdf8;
 }
 
 .footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background-color: #050811;
 }
 
 /* Observatory style card */
