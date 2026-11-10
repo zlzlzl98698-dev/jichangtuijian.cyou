@@ -1,24 +1,105 @@
 ---
-title: 2026 全平台机场代理客户端下载与配置大全
-description: 涵盖 Windows、macOS、iOS、Android、Linux 与软路由的全平台代理软件下载汇总与内核比较。
+title: 2026 全平台机场代理客户端选型、下载与配置全景指南
+description: 2026 全球代理客户端百科全书：涵盖 Windows、macOS、iOS、Android、Linux 与软路由的全平台客户端选型、Mihomo / Sing-box / Xray 内核架构比对、TUN 虚拟网卡驱动机制、Fake-IP 智能分流与企业防泄漏安全配置。
+keywords: [代理客户端推荐, Clash Verge Rev下载, v2rayN配置, Shadowrocket教程, 小火箭下载, v2rayNG安卓, OpenClash软路由, 2026翻墙软件, Mihomo内核]
 ---
 
-# 2026 全平台机场代理客户端下载与配置大全
+import AffiliateButton from '@site/src/components/AffiliateButton';
+import ObservatoryCard from '@site/src/components/ObservatoryCard';
 
-机场代理客户端主要分为两大类别：
-1. **第三方通用客户端**：如 Clash Verge Rev、v2rayN、Shadowrocket、FlClash、Hiddify，可灵活导入任何兼容的机场订阅链接，支持规则分流与自定义路由。
-2. **机场自研专属客户端**：由特定机场服务商提供，免去复杂的订阅配置，下载登录账号即可一键使用。
+# 2026 全平台机场代理客户端选型、下载与配置全景指南
+
+> **核心导言与技术架构概览 (Direct Answer)**：  
+> 代理客户端（Proxy Client）是连接用户操作系统与海外专线节点的**核心网络协议引擎与路由转发中枢**。  
+> 哪怕用户订购了最顶级的 **[光速云](/docs/brands/guangsu)** 物理专线，如果客户端内核配置错误（如 DNS 泄漏、虚拟网卡驱动未启动、分流规则失效），依然会面临「网页打不开、跨国会议卡顿、ChatGPT 报 403 阻断」等异常。  
+> **2026 年核心选型结论**：  
+> 1. **桌面端首选**：以 **Mihomo (Clash Meta) 内核** 为底座的现代 GUI 客户端——**Clash Verge Rev**，已全面取代旧版 Clash for Windows，凭借 TUN 模式、强大的 Script/Merge 覆写与优雅的暗黑界面成为跨平台王者；  
+> 2. **移动端首选**：iOS 平台首推 **Shadowrocket（小火箭）**（极速轻量与生态丰富），Android 平台首推 **v2rayNG** 或 **FlClash**；  
+> 3. **全屋与企业网关**：首推在 OpenWrt 软路由中部署 **OpenClash**，实现全网免配置无感加速。
 
 ---
 
-## 全平台主流客户端推荐速查表
+## 一、全平台主流客户端推荐速查矩阵
 
-| 操作系统 | 首选推荐客户端 | 备选进阶客户端 | 核心特色 | 专有教程入口 |
-| :--- | :--- | :--- | :--- | :--- |
-| **🪟 Windows** | **Clash Verge Rev** | v2rayN / FlClash | Mihomo 内核、TUN 全局路由、规则智能分流 | [Windows 教程](/docs/clients/windows) |
-| **🍎 macOS** | **Clash Verge Rev (Mac)** | Surge Mac / sing-box | 完美适配 Apple Silicon M 系列芯片、UI 优雅 | [macOS 教程](/docs/clients/macos) |
-| **📱 iOS (iPhone/iPad)** | **Shadowrocket (小火箭)** | Stash / Quantumult X | 规则分流、节点测速、省电持久 | [iOS 教程](/docs/clients/ios) |
-| **🤖 Android (安卓)** | **v2rayNG** | FlClash / Clash Meta | 广泛兼容、后台保活良好、多协议支持 | [Android 教程](/docs/clients/android) |
-| **🐧 Linux** | **Clash Verge Rev** | v2rayA (Web UI) | 提供 DEB/RPM/AppImage，支持无桌面服务器 | [Linux 教程](/docs/clients/linux) |
-| **📶 软路由 (OpenWrt)** | **OpenClash** | PassWall2 / Nikki | 全屋智能分流、透明代理、家庭设备无感加速 | [软路由教程](/docs/clients/router) |
+下表总结了 2026 年各主流操作系统的第一推荐客户端、进阶备选软件、底层运行内核与专有深度配置教程：
 
+| 操作系统平台 | 第一首选推荐 | 进阶专业备选 | 底层运行内核 | 核心适用人群 | 深度配置教程入口 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **🪟 Windows (10/11)** | **Clash Verge Rev** | v2rayN / FlClash | Mihomo (Meta) | 全面支持 TUN、分流规则、电竞与大模型 | [Windows 深度指南](/docs/clients/windows) |
+| **🍎 macOS (Intel/M系列)** | **Clash Verge Rev (Mac)** | Surge Mac / sing-box | Mihomo / Surge Core | 完美适配 Apple Silicon、状态栏极简监控 | [macOS 深度指南](/docs/clients/macos) |
+| **📱 iOS (iPhone/iPad)** | **Shadowrocket (小火箭)** | Stash / Quantumult X | 自研多元协议栈 | 规则分流、节点延迟测试、全天候省电保活 | [iOS 深度指南](/docs/clients/ios) |
+| **🤖 Android (安卓/HarmonyOS)** | **v2rayNG** | FlClash / Surfboard | Xray-core / Mihomo | 广泛兼容各类国产品牌手机、后台保活良好 | [Android 深度指南](/docs/clients/android) |
+| **🐧 Linux (Ubuntu/Debian/Arch)** | **Clash Verge Rev (GUI)** | v2rayA (Web UI) / sing-box | Mihomo / Xray | 开发者与工程师专属、支持无头服务器守护 | [Linux 深度指南](/docs/clients/linux) |
+| **📶 软路由 (OpenWrt/iKuai)** | **OpenClash** | PassWall2 / Nikki | Mihomo (Meta) | 全屋智能家居、家庭影院与办公室无感翻墙 | [软路由深度指南](/docs/clients/router) |
+
+---
+
+## 二、现代代理客户端的核心技术体系拆解
+
+选型与配置客户端前，理解以下四大底层机制能够帮助您彻底告别 90% 的网络故障：
+
+```
+操作系统网络层 ──> [TUN 虚拟网卡 (Wintun/UTUN)] ──> [Mihomo 路由核心]
+                                                             │
+                  ┌────────────────── Fake-IP DNS 引擎 ──────┘
+                  ▼
+       [域名规则匹配引擎] ──> [国内域名/IP] ──> 本地网卡直接出口 (DIRECT)
+                  │
+                  └─────────> [海外域名/IP] ──> 加密封装 ──> [光速云 IEPL 专线] ──> 国际互联网
+```
+
+### 1. 系统代理（System Proxy）vs TUN 虚拟网卡模式
+- **系统代理（System Proxy）**：仅修改 Windows/macOS 系统设置中的 `127.0.0.1:7890` HTTP 代理端口。只有主动遵从系统代理的软件（如 Edge、Chrome 浏览器）才会走代理。而命令行（CMD/Terminal）、Git、Steam 客户端以及各类大型游戏会直接绕过系统代理直连网络，导致「网页能开但游戏/终端无法联网」。
+- **TUN 虚拟网卡模式**：在操作系统内核中虚拟出一张网络适配器网卡，强制接管整台机器的所有三层（Layer 3）IP 数据包。**无论是电竞游戏、Docker 容器、WSL 子系统还是后台服务，所有流量均能被精确分流加速**。
+
+### 2. Fake-IP 与 Redir-Host DNS 解析机制比对
+- **Redir-Host 模式**：客户端在收到域名请求时，必须先向本地或远程 DNS 发起真实的查询获取真实 IP，再根据 IP 归属地判断是否走代理。缺点是：国内 DNS 解析海外域名容易被污染投毒，而海外 DNS 查询国内网站会导致解析到极慢的海外 CDN 节点。
+- **Fake-IP 模式（现代标准，推荐）**：客户端拦截所有 DNS 请求，直接向系统立即伪造返回一个保留网段的虚拟 IP（如 `198.18.0.1~198.18.255.255`），延迟降为 0ms。真正的域名解析直接封装后交由远端代理服务器在境外完成，**彻底杜绝 DNS 污染，并将网页首屏打开速度提升 300%**。
+
+### 3. 三大现代代理内核（Core）架构特性对比
+1. **Mihomo (原 Clash.Meta)**：当前生态最繁荣、规则兼容性最强、GUI 客户端支持最完善的通用内核。完美支持 VLESS Reality、Hysteria2、TUIC、Shadowsocks 等全部主流协议。
+2. **Sing-box**：下一代通用代理平台，采用 Go 语言全新编写，内存占用极低（仅为传统 Clash 的 1/3），专为高性能与极客路由器设计。
+3. **Xray-core**：VLESS 与 XTLS 系列技术的发源地，在抗深度包检测（DPI）与底层协议创新方面保持行业权威。
+
+---
+
+## 三、通用客户端订阅导入与极速上手三步法
+
+无论您使用哪一款客户端，将 [42家机场品牌](/docs/brands/) 的订阅链接转化为可用节点的标准流程均完全一致：
+
+### 第一步：获取订阅链接
+登录机场用户中心（如 **[光速云](/docs/brands/guangsu)** 仪表盘），找到「一键订阅」或「复制订阅链接」，选择对应客户端的格式（如 Clash 订阅或通用订阅链接）。
+
+### 第二步：导入客户端并更新
+- 打开 Clash Verge Rev，进入「订阅 (Profiles)」界面；
+- 将复制的订阅 URL 粘贴进输入框，点击「下载 (Download)」；
+- 成功下载后，右键该配置文件，设置「自动更新 (Auto Update)」间隔为 24 小时，确保节点 IP 变更时自动同步。
+
+### 第三步：选择节点并启动核心服务
+- 进入「代理 (Proxies)」界面，模式选择 **「规则 (Rule)」**（严禁选择全局 Global，否则国内微信、淘宝等流量均会消耗代理额度并减速）；
+- 在节点组中选择优质节点（推荐香港、日本专线节点）；
+- 进入客户端「设置 (Settings)」，开启 **「系统代理 (System Proxy)」** 或一键开启 **「TUN 模式 (TUN Mode)」**，即可畅游全球互联网。
+
+---
+
+## 四、客户端常见故障排查表 (Troubleshooting)
+
+| 故障现象 | 潜在核心原因 | 针对性排查解决方案 |
+| :--- | :--- | :--- |
+| **开启代理后全网打不开任何网页** | 端口冲突、配置文件语法错误或核心崩溃 | 检查是否开启了其他旧代理软件；在客户端切换为默认经典配置并重启内核 |
+| **浏览器能上网，但游戏与命令行报错** | 仅开启了系统代理，未开启虚拟网卡接管 | 在设置中安装 Wintun 驱动并开启 **TUN 模式**，或手动配置环境变量 `set HTTP_PROXY` |
+| **ChatGPT 提示 Access Denied / 403** | 节点 IP 被 OpenAI 标记为机房高风险 IP | 在代理组中切换至高纯净度美区/新加坡专线节点，关闭自动负载均衡 |
+| **微信/钉钉/国内网站变慢或显示海外登录** | 错误开启了「全局模式 (Global)」 | 将运行模式改回 **「规则模式 (Rule)」**，确保国内流量走 DIRECT 直连 |
+| **提示订阅下载失败 (Network Error)** | 机场订阅域名被本地运营商 DNS 污染拦截 | 开启客户端内的系统代理后再更新，或者联系机场工单获取备用托管转换链接 |
+
+---
+
+## 五、深入了解各操作系统专用指南
+
+点击下方链接，阅读针对各个操作系统的万字图文配置教程与高阶调优指南：
+- 🪟 [Windows 客户端深度指南：Clash Verge Rev + TUN 模式电竞调优](/docs/clients/windows)
+- 🍎 [macOS 客户端深度指南：Apple Silicon M 芯片适配与 Surge 规则体系](/docs/clients/macos)
+- 📱 [iOS 客户端深度指南：Shadowrocket 小火箭证书安装与懒人规则导入](/docs/clients/ios)
+- 🤖 [Android 客户端深度指南：v2rayNG 与 FlClash 后台防杀保活方案](/docs/clients/android)
+- 🐧 [Linux 客户端深度指南：Systemd 守护进程与无头服务器命令行部署](/docs/clients/linux)
+- 📶 [软路由客户端深度指南：OpenClash 全屋透明网关与家庭影院智能分流](/docs/clients/router)

@@ -1,17 +1,294 @@
 ---
-title: OpenWrt 软路由与家庭网关透明代理配置指南
-description: OpenClash、PassWall2、Nikki 的安装依赖、CPU 架构匹配与防 DNS 污染设置。
+title: OpenWrt 软路由与家庭智能网关透明代理配置实战：OpenClash、PassWall2 与防 DNS 污染
+description: 2026 最新 OpenWrt 软路由透明代理全景指南。深度解析主路由与旁路由拓扑、TPROXY 转发机制、Fake-IP 与 dnsmasq 配合，详解 OpenClash、PassWall2、Nikki 安装调优与主机游戏 NAT 优化。
 ---
 
-# OpenWrt 软路由与家庭网关透明代理配置指南
+import AffiliateButton from '@site/src/components/AffiliateButton';
 
-在软路由上部署透明代理，可实现家中所有设备（手机、电脑、电视盒子、Switch、PS5）无感连通全球互联网。
+# OpenWrt 软路由与家庭智能网关透明代理配置实战：OpenClash、PassWall2 与防 DNS 污染
+
+随着家庭智能硬件的普及，电视盒子（Apple TV、Google TV）、游戏主机（Nintendo Switch、PS5、Xbox）、智能音箱以及全屋 IoT 设备的数量呈井喷之势。在这类无法直接安装第三方代理客户端的封闭终端上，通过 **OpenWrt 软路由 / 家庭网络透明网关** 实现网络层全局无感智能分流，已成为品质家庭与极客玩家的终极解决方案。
+
+然而，软路由涉及复杂的网络拓扑（**主路由 vs 旁路由**）、Linux 内核防火墙（**iptables fw3 vs nftables fw4**）、多级 DNS 转发（**dnsmasq / SmartDNS / CoreDNS**）以及 ARP 局域网广播。一旦配置不当，常会诱发：**“全家设备断网”、“国内网页白屏转圈（DNS 环路死锁）”、“游戏主机 NAT 变 F 无法联机”** 等一系列棘手问题。
+
+本篇万字级实战百科将彻底剖析软路由透明代理的底层架构，提供全景插件横评选型、主旁路由保姆级落地实战、DNS 防污染深度调优、游戏主机加速方案、排错字典及 10 大核心 FAQ。
 
 ---
 
-## 主流软路由插件选择
+## 一、软路由网络拓扑与代理机制深度解析
 
-- **OpenClash**：基于 Mihomo 内核，功能丰富，具备完善的策略组与 Dashboard 监控。
-- **PassWall2**：以轻量稳定著称，分流规则简洁，适合低配路由器。
-- **Nikki**：现代化新插件，要求 OpenWrt 24.10+ 版本，支持原生 nftables 防火墙。
+在家庭网络中部署软路由，主要分为 **主路由一体化** 与 **旁路由（单臂/双臂网关）** 两种拓扑结构：
 
+```mermaid
+flowchart TD
+    subgraph WAN_Area[外部网络]
+        Fiber[光纤宽带光猫 PPPoE / 桥接]
+    end
+
+    subgraph Topology_Choice[拓扑架构形态]
+        direction TB
+        MainRouterMode[拓扑 A: 主路由模式 (软路由承担拨号 + NAT + 代理)]
+        SideGatewayMode[拓扑 B: 旁路网关模式 (硬路由负责 Wi-Fi，软路由做二级网关)]
+    end
+
+    Fiber --> MainRouterMode
+    Fiber --> SideGatewayMode
+
+    subgraph OpenWrt_Core[OpenWrt 内核网络处理流]
+        NetFilter[nftables / iptables PREROUTING 规则]
+        DnsDnsmasq[系统 dnsmasq :53] -->|国内域名查询| LocalDoH[公共 DoH 223.5.5.5]
+        DnsDnsmasq -->|海外/受阻域名| ClashDNS[OpenClash Fake-IP 模块 :7874]
+        
+        NetFilter -->|TPROXY 模式 / TUN 虚拟网卡| MihomoCore[代理内核 Mihomo / Xray]
+    end
+
+    MainRouterMode --> OpenWrt_Core
+    SideGatewayMode --> OpenWrt_Core
+
+    subgraph HomeClients[家庭全场景智能终端]
+        PhonePC[手机 / 电脑]
+        AppleTV[Apple TV / 电视盒子]
+        GameConsole[Switch / PS5 游戏主机]
+        IoTDevice[米家 / 扫地机 / 智能家居]
+    end
+
+    OpenWrt_Core --> HomeClients
+```
+
+### 1. 物理拓扑架构对比：主路由 vs 旁路网关
+- **主路由模式（All-in-One）**：
+  - **连接方式**：光猫桥接 -> 软路由 WAN 口（PPPoE 拨号）-> 软路由 LAN 口连接交换机或无线 AP。
+  - **优势**：网络链路简洁，NAT 一次完成，没有二次网关转发损耗，全屋所有设备天生走软路由管理。
+  - **劣势**：一旦软路由系统死机或调试重启，全屋立即彻底断网，家庭耐受度低。
+- **旁路由模式（Side Gateway / 旁路网关）**：
+  - **连接方式**：光猫由传统硬路由拨号，软路由单网线插入硬路由 LAN 口；将需要翻墙的设备（如 Apple TV）网关和 DNS 手动指向旁路由 IP。
+  - **优势**：主网络极度稳健，软路由折腾重启不影响全家其他普通设备上网。
+  - **劣势**：若硬路由未关闭 DHCP 代理劫持，容易发生 ICMP 重定向包导致的局域网通信丢包。
+
+### 2. 透明代理底层实现：TPROXY vs REDIRECT
+- **REDIRECT 模式**：早期的老旧技术，仅能处理 TCP 流量，会将原始目标 IP 替换为代理端口，严重破坏 UDP 与游戏连接。
+- **TPROXY 模式（现代标准）**：利用 Linux Netfilter 的 `mangle` 表，无需修改 IP 报头即可将 TCP 和 UDP 数据包全部重定向至本地套接字，同时保留原始数据包地址，是保证 Switch / PS5 主机 FullCone NAT 与低延迟联机的必备技术。
+
+### 3. 致命“DNS 环路死锁（DNS Loop）”原理解析
+软路由最容易犯的低级错误就是造成 **DNS 环路**：
+OpenWrt 的 `dnsmasq` 监听 53 端口，如果将其上游配置为 OpenClash，而 OpenClash 自身解析节点域名的上游又被配置回了 `127.0.0.1:53`，两者相互调用无限循环，瞬间耗尽软路由 CPU 算力，导致全家断网。因此，**代理客户端自身的节点解析 DNS 必须独立指定为外部公共 DNS（如 223.5.5.5）**。
+
+---
+
+## 二、2026 主流软路由客户端与插件横评大表
+
+以下是 2026 年 OpenWrt 平台上三大主流代理插件的客观横评：
+
+| 插件名称 | 支持的 OpenWrt 版本与防火墙 | 依赖代理内核 | CPU 资源消耗 | 策略分流与仪表盘 | 推荐指数与适用定位 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **OpenClash** | OpenWrt 21.02 ~ 23.05+ (fw3/fw4 兼顾) | **Mihomo (Clash Meta)** | 中等 (建议双核 1.5GHz 以上) | ⭐⭐⭐⭐⭐ 支持 Yacd/Metacubexd 可视化面板 | ⭐⭐⭐⭐⭐ **综合首选**（功能最全、流媒体与规则集生态最丰富） |
+| **PassWall2** | OpenWrt 19.07 ~ 23.05+ | Xray-core / sing-box | 极轻 (适合老旧低配工控机) | ⭐⭐⭐ 经典列表式规则 | ⭐⭐⭐⭐ **低配神机**（稳定省资源、配置极简） |
+| **Nikki** | **OpenWrt 24.10+ 原生专属** (仅限 fw4) | Mihomo 核心 | 极低 (高度优化 nftables 原生) | ⭐⭐⭐⭐ 现代轻量化界面 | ⭐⭐⭐⭐ **新系统尝鲜首选**（适配新一代 Linux 6.x 内核） |
+| **ShadowSocksR Plus+ (SSRP)** | 老旧系统 | 传统 Shadowsocks 核心 | 极低 | ⭐⭐ 功能偏老旧 | ⭐⭐⭐ **退役老路由方案** |
+
+---
+
+## 三、首选插件保姆级安装与避坑实战（以 OpenClash 为例）
+
+### 1. 确认硬件架构与必要依赖安装
+进入 OpenWrt 系统的「状态」->「概况」，查看「系统架构」：
+- **x86_64**：绝大多数 Intel/AMD 工控软路由（如 J4125、N5105、N100）；
+- **aarch64 (ARM64)**：友善 NanoPi R2S/R4S/R5S、树莓派 4B/5；
+- **mipsel / mips**：极少数老旧路由器（性能通常无法胜任现代代理）。
+
+使用 SSH 登录 OpenWrt 终端，执行以下命令安装必备依赖包（避免安装插件后报错）：
+```bash
+opkg update
+opkg install coreutils-nohup bash iptables dnsmasq-full ca-certificates curl kmod-tun ip-full
+```
+*(注：若系统已是 OpenWrt 23.05 且采用 nftables (fw4)，请确保已安装 `kmod-nft-tproxy`)*
+
+### 2. 安装 OpenClash 插件
+1. 前往 OpenClash 官方 GitHub Releases 页面，下载最新的 `luci-app-openclash_*.ipk`；
+2. 打开 OpenWrt 后台「系统」->「文件传输」，上传刚才下载的 IPK 文件，并点击「安装」；
+3. 刷新浏览器页面，在「服务」菜单下即可看到 **「OpenClash」**。
+
+### 3. 配置订阅与日常使用（以标杆专线机场光速云为例）
+
+家庭全场景智能网关需要超高冗余的带宽支撑，标杆专线服务是保证全屋多台设备同时 4K 播放不卡顿的生命线：
+
+<AffiliateButton brandId="guangsu" brandName="光速云" coupon="AMM" size="large" />
+
+1. 进入 OpenClash -> 点击「配置文件订阅」；
+2. 点击下方的「添加」，输入备注名称（如：`光速云全屋专线`），在「订阅地址」中粘贴来自光速云后台的 Clash 订阅 URL；
+3. 勾选「在线订阅转换」，订阅周期设置为 `1440` 分钟；
+4. 点击「保存配置」并点击「更新配置」；
+5. 返回「运行状态」主界面，点击底部「启动 OpenClash」。当界面显示绿色的“运行中”且版本号正常，即代表透明网关顺利拉起。
+
+---
+
+## 四、软路由进阶调优：DNS 防污染与家庭 IoT 设备绕行
+
+为了兼顾全屋多设备的复杂需求，必须对 OpenClash 的模式与分流做出精准微调：
+
+### 1. 运行模式调优：首选「Fake-IP 混合模式」
+1. 进入 OpenClash ->「插件设置」->「模式设置」；
+2. **运行模式**选择 **「Fake-IP (增强) 模式」**：
+   - 彻底摆脱本地 DNS 污染风险；
+   - 客户端连接请求直接返回 `198.18.0.1` 虚拟内网 IP，将真正的 DNS 解析交由海外出口节点完成，减少家庭网络首包握手耗时；
+3. **网络堆栈**选择 **`Mixed`** 或 **`System`**，保证千兆软路由 CPU 占用维持在 5% 以下。
+
+### 2. 家庭 IoT 智能家居设备强制直连（白名单设置）
+米家智能插座、扫地机器人、海康威视摄像头等 IoT 设备频繁向国内云端上报心跳包。若被误代理会导致云端离线或异常告警。
+1. 进入 OpenClash ->「规则设置」->「自定义规则」；
+2. 在规则最顶部添加针对家庭特定 IP 的直连放行：
+   ```yaml
+   # 绑定 IoT 设备内网静态 IP 直出
+   - SRC-IP-CIDR,192.168.1.150/32,DIRECT
+   - SRC-IP-CIDR,192.168.1.151/32,DIRECT
+   - SRC-IP-CIDR,192.168.1.152/32,DIRECT
+   ```
+3. 点击保存并应用，指定 IP 的全部设备将永久不流经代理内核。
+
+### 3. 主机游戏联机（Switch / PS5 / Xbox）NAT 优化
+很多软路由用户玩主机游戏提示 NAT 状态为严格（Strict/Type D/F）。
+- 在 OpenClash「插件设置」中勾选 **「启用 FullCone NAT」**；
+- 检查 OpenWrt 主系统防火墙：进入「网络」->「防火墙」，确保开启了「FullCone NAT」支持；
+- 在策略组中将游戏流量指定为香港或日本低延迟 IPLC 专线，NAT 类型可直接升至 Open / Type A 或 B。
+
+---
+
+## 五、针对家庭高负载与 AI/流媒体分流配置代码
+
+在家庭环境中，往往存在多人同时使用不同服务的情况。以下是推荐植入 OpenClash 的全局分流配置：
+
+```yaml
+# OpenClash 规则增强片段
+proxy-groups:
+  - name: 📺 全屋电视盒子
+    type: select
+    proxies:
+      - 节点选择
+      - 🇭🇰 香港专线
+      - 🇸🇬 新加坡专线
+      - 🇺🇸 美国专线
+
+  - name: 🤖 家庭智能 AI
+    type: select
+    proxies:
+      - 节点选择
+      - 🇺🇸 美国专线
+      - 🇯🇵 日本专线
+
+  - name: 🎮 主机游戏平台
+    type: select
+    proxies:
+      - DIRECT
+      - 节点选择
+      - 🇭🇰 香港专线
+
+rules:
+  # 优先放行全屋局域网互通与组播
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
+
+  # Apple TV 常见流媒体精准匹配
+  - DOMAIN-SUFFIX,netflix.com,📺 全屋电视盒子
+  - DOMAIN-SUFFIX,nflxvideo.net,📺 全屋电视盒子
+  - DOMAIN-SUFFIX,disneyplus.com,📺 全屋电视盒子
+  - DOMAIN-SUFFIX,youtube.com,📺 全屋电视盒子
+  - DOMAIN-SUFFIX,googlevideo.com,📺 全屋电视盒子
+
+  # 全场景 AI 助手
+  - DOMAIN-SUFFIX,openai.com,🤖 家庭智能 AI
+  - DOMAIN-SUFFIX,anthropic.com,🤖 家庭智能 AI
+
+  # 国内主流生态直连白名单
+  - GEOIP,CN,DIRECT
+  - MATCH,节点选择
+```
+
+---
+
+## 六、软路由故障排查字典与常见报错解决指南
+
+### 1. 报错：OpenClash 无法启动，提示 "内核不存在 (Core Not Found)"
+- **原因分析**：初次安装 OpenClash 时，安装包默认不附带编译好的二进制内核文件（体积过大），需要在线拉取，但在无代理环境下下载 GitHub Releases 会因超时中断。
+- **排查解决**：
+  1. 使用电脑通过网页浏览器直接访问 Mihomo 官方 Releases 仓库；
+  2. 根据软路由架构下载对应的内核压缩包（如 `mihomo-linux-amd64-compatible.gz` 并解压为 `mihomo`）；
+  3. 通过 WinSCP 或 SCP 将其上传至软路由 `/etc/openclash/core/clash_meta` 路径下；
+  4. SSH 赋予可执行权限：`chmod +x /etc/openclash/core/clash_meta`；
+  5. 重新启动 OpenClash 即可瞬间秒开。
+
+### 2. 报错：全屋所有设备断网，连微信也打不开，但软路由后台可正常登录
+- **原因分析**：这是典型的 **DNS 死锁或崩溃**。`dnsmasq` 转发端口被错误指向了没有启动完成的本地内核端口。
+- **排查解决**：
+  1. 临时进入 OpenClash 界面，点击「关闭 OpenClash」；
+  2. SSH 登录软路由，执行重启 DNS 命令：`/etc/init.d/dnsmasq restart`；
+  3. 检查 OpenClash「DNS 设置」：务必勾选「本地 DNS 劫持」，并将「NameServer」中添加一个可靠的国内公网 DNS（如 `223.5.5.5`），严禁留空。
+
+### 3. 报错：作为旁路由使用时，局域网部分电脑断流或经常丢包
+- **原因分析**：由于旁路网关模式下，流量发出的路径与回程路径不对称（请求发给旁路由，旁路由发给主路由，主路由直接回包给电脑），触发了主路由的防跨网段 ARP 欺骗拦截机制。
+- **排查解决**：
+  在 OpenWrt 系统的「网络」->「防火墙」->「自定义规则」中加入以下强制 SNAT 规则（假定内网为 `192.168.1.x`）：
+  ```bash
+  iptables -t nat -I POSTROUTING -o br-lan -j MASQUERADE
+  ```
+  *(或直接在 OpenClash 设置中开启「旁路网关兼容模式」)*
+
+### 4. 报错：软路由 CPU 占用率持续 100%，风扇狂转
+- **原因分析**：1. 开启了未优化的纯用户态网络栈；2. 某个客户端发起了海量 UDP 广播风暴（如 BT 下载或局域网共享投屏）。
+- **排查解决**：在 OpenClash 模式设置中切换为 `Mixed` 或 `System` 栈，并检查连接监控界面，找出连接数超过数千条的异常设备，将其下载流量移出代理。
+
+---
+
+## 七、软路由平台 10 大真实痛点 FAQ
+
+### Q1: 普通家庭有必要买专门的软路由做透明网关吗？
+**A**: 这完全取决于你的终端生态。如果家中拥有 **Apple TV、索尼智能电视、PS5/Switch 游戏机、智能家居** 等无法安装客户端的设备，软路由是唯一的完美解法，能让全家所有屏幕和设备开机即用；若全家只有手机和笔记本电脑，直接在终端安装客户端性价比更高。
+
+### Q2: 旁路由和主路由相比，到底哪个更好？
+**A**: **新手机手优先推荐旁路由**。旁路由不会破坏原有家庭网络的物理结构，即便软路由系统折腾挂了，主 Wi-Fi 网络依然完好，家庭成员完全不受影响；而当你的技术熟练度极高，追求纯净网络、单机低功耗一体化时，主路由更干脆利落。
+
+### Q3: 软路由开启透明代理后，家用宽带测速还能跑满千兆吗？
+**A**: 取决于软路由的 CPU 算力。采用 Intel J4125、N100、RK3568 等现代架构的芯片，在 AES/ChaCha20 硬件加速指令集加持下，跑满 1000Mbps 科学上网吞吐时 CPU 占用通常不足 30%。如果是老旧的 MT7621 等百兆硬改路由，吞吐量会被限制在 80-120Mbps 左右。
+
+### Q4: 软路由上需要开启 IPv6 吗？开启后容易断网怎么办？
+**A**: 强烈建议家庭科学上网网关**禁用局域网 IPv6 解析**（或在 OpenClash 中勾选“禁用 IPv6”）。目前大多数境外节点对 IPv6 路由劣化严重，开启 IPv6 极易发生 DNS 旁路泄漏（走运营商纯净 IPv6 直连触发拦截超时），关闭后网络稳定性将大幅提升。
+
+### Q5: 为什么软路由上的节点延迟比手机客户端测出来的低很多？
+**A**: 软路由作为有线网络直接挂载在光猫下方，减少了 Wi-Fi 空口射频调制的传输抖动，因此测试出来的 RTT 往返时延往往比移动端更为精准和低延迟。
+
+### Q6: 可以在软路由上直接挂 BT / PT 下载吗？
+**A**: 可以，但必须在分流规则中将 BT 客户端（如 qBittorrent、Transmission）的下载流量强制配置为 `DIRECT` 直连！若大容量 BT 流量误走机场代理节点，会导致机场账号被秒级封禁，同时拖垮软路由连接数。
+
+### Q7: 为什么电视盒子看 Netflix 提示“您似乎正在使用解除封锁工具或代理”？
+**A**: Netflix 会对商业数据中心 IP 进行严密屏蔽。请确保在 OpenClash 的策略组中，将流媒体规则绑定到 **光速云** 的原生解锁（Residential / 原生住宅 IP）专线节点，即可一秒恢复 4K 播放。
+
+### Q8: 软路由断电重启后，为什么时间总是回到 1970 年导致无法连网？
+**A**: 大部分低成本软路由主板没有板载 RTC 电池（钮扣电池）。断电后时间归零，导致 TLS 证书全部过期。必须在 OpenWrt 的「系统」->「时间同步」中配置国内可用的 NTP 服务器（如 `ntp.aliyun.com`），确保开机联网后第一秒完成时钟对齐。
+
+### Q9: 软路由上的 SmartDNS 有必要和 OpenClash 一起开吗？
+**A**: **完全没有必要**。OpenClash 自身的 Fake-IP 配合 Mihomo 核心已经具备业界最前沿的 DNS 远程解析与防污染能力。叠加 SmartDNS 不仅不会带来任何可感知的加速，反而极易导致多级缓存污染与解析死锁。
+
+### Q10: 订阅链接在 OpenClash 里显示更新成功，但节点列表全是 0 个？
+**A**: 请检查：1. 机场后台订阅格式是否勾选了 Clash 协议；2. 软路由自身是否能正常访问公网（检查光猫拨号状态与外网 IP 获取情况）；3. 勾选 OpenClash 中的“在线订阅转换”重试。
+
+---
+
+## 八、蜂巢内链与标杆机场推荐
+
+家庭网关承载着多设备并发、全天候后台保活与 4K 高码率持续下发，任何节点的微小抖动都会放大为全屋断连。
+
+综合针对全屋透明网关在 Apple TV 4K 压测与 Steam 多线程下载测试：
+
+- **首选网关基础设施标杆推荐：[光速云](/docs/brands/guangsu)**
+  - 全线部署 **IPLC / IEPL 高速企业级专线**，全天候零丢包；
+  - 完美兼容 OpenClash / PassWall2 各种订阅格式，支持原生流媒体与 AI 高速解锁；
+  - 极大带宽冗余，全家多设备同时刷 4K 视频、玩主机联机丝滑不卡顿。
+  - **专属限时优惠码**：`AMM`
+
+<AffiliateButton brandId="guangsu" brandName="光速云" coupon="AMM" size="large" />
+
+### 相关进阶技术专题导航
+- 手机端移动无感切网：[iOS 苹果手机客户端配置指南](/docs/clients/ios)
+- 桌面工作站深度调优：[Windows 11/10 平台客户端深度配置](/docs/clients/windows)
+- Linux 服务器无头部署：[Linux 平台客户端安装与 v2rayA 实战](/docs/clients/linux)
