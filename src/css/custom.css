@@ -67,10 +67,19 @@ body {
 }
 
 .navbar__logo {
-  height: 32px;
-  width: 32px;
+  height: 34px;
+  width: 34px;
   margin-right: 10px;
-  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.6));
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid rgba(236, 72, 153, 0.8);
+  box-shadow: 0 0 10px rgba(236, 72, 153, 0.5), 0 0 6px rgba(56, 189, 248, 0.5);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.navbar__logo:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 16px rgba(236, 72, 153, 0.8), 0 0 10px rgba(56, 189, 248, 0.8);
 }
 
 .navbar__title {

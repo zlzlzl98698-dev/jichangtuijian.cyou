@@ -5,7 +5,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: '机场 cyou · 2026 高端机场推荐与网络可观测性平台',
   tagline: '42家主流机场权威实测 · IEPL/IPLC专线万字测评矩阵 · AI与全球流媒体解锁可观测实验室',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/favicon.png',
 
   url: 'https://jichangtuijian.cyou',
   baseUrl: '/',
@@ -72,7 +72,7 @@ const config: Config = {
       title: '机场 cyou',
       logo: {
         alt: '机场 cyou 实验室',
-        src: 'img/logo.svg',
+        src: 'img/avatar.png',
       },
       items: [
         {

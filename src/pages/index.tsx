@@ -27,7 +27,7 @@ export default function Home(): JSX.Element {
         '@id': 'https://jichangtuijian.cyou/#organization',
         'name': '机场 cyou 实验室',
         'url': 'https://jichangtuijian.cyou',
-        'logo': 'https://jichangtuijian.cyou/img/logo.svg'
+        'logo': 'https://jichangtuijian.cyou/img/avatar.png'
       }
     ]
   };
